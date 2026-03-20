@@ -20,6 +20,7 @@ A tool for searching terms across Word (.docx) and PDF files, with a modern dark
 - CSV export
 - Favorites system for frequently used folders
 - Multi-threaded search (UI stays responsive) — ~500 files / 600 MB processed in about 3 minutes
+- SQLite FTS5 index version available for near-instant searches on already-indexed folders
 
 ## Requirements
 
@@ -33,7 +34,10 @@ pip install PyQt6 python-docx pymupdf
 ## Running
 
 ```bash
-# PyQt6 interface (recommended)
+# PyQt6 interface with SQLite FTS5 index (fast searches)
+python search_tool_qt_fts.py
+
+# PyQt6 interface without index (direct file search)
 python search_tool_qt.py
 
 # Alternative Tkinter interface
@@ -50,6 +54,16 @@ python search_tool_tkinter.py
    - **DOCX**: copies the context to the clipboard for quick Ctrl+F
 
 Frequently used folders can be saved as **favorites** (right-click to rename or delete).
+
+## SQLite FTS5 Index (`search_tool_qt_fts.py`)
+
+The FTS5 version maintains a local index to speed up searches on previously browsed folders.
+
+- Click **"Indexer le dossier"** to index the current folder — the indicator shows the number of indexed files (`✅ Index à jour` or `⚠ N/M indexés`)
+- Subsequent searches use the FTS5 index for already-indexed files and direct search for the rest
+- The index is **global** (shared across all folders) but searches are always filtered to the selected folder
+- Files with no extractable text (scanned PDFs, protected files) are marked as processed and not retried
+- The index is stored in `.data/search_tool_index.db` in the application folder
 
 ## Configuration
 

@@ -7,6 +7,7 @@ Dépendances : pip install PyQt6 python-docx pymupdf
 import os
 import re
 import json
+import sqlite3
 import time
 import unicodedata
 import threading
@@ -45,7 +46,12 @@ ICON_PNG_B64 = (
     "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"
 )
 
+_APP_DIR    = os.path.dirname(os.path.abspath(__file__))
+_DATA_DIR   = os.path.join(_APP_DIR, ".data")
+os.makedirs(_DATA_DIR, exist_ok=True)
+
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".search_tool_config.json")
+DB_FILE      = os.path.join(_DATA_DIR, "search_tool_index.db")
 
 # ── Palette dark ────────────────────────────────────────────────────────────
 BG_DARK      = "#1A1D23"
@@ -347,6 +353,125 @@ def get_combined_context(text: str, matches: list, window: int = 100,
         return " | ".join(get_context(text, m, window) for m in matches)
 
 # ── Recherche ────────────────────────────────────────────────────────────────
+
+# ── Base de données SQLite FTS5 ───────────────────────────────────────────────
+
+def get_db() -> sqlite3.Connection:
+    """Ouvre la connexion à la base d'index."""
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS files (
+            path    TEXT PRIMARY KEY,
+            mtime   REAL,
+            indexed INTEGER DEFAULT 0
+        )
+    """)
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS fts
+        USING fts5(path UNINDEXED, content, tokenize='unicode61')
+    """)
+    conn.commit()
+    return conn
+
+
+def is_indexed(conn: sqlite3.Connection, path: str) -> bool:
+    """Vérifie si le fichier est indexé et à jour."""
+    row = conn.execute(
+        "SELECT mtime FROM files WHERE path=?", (path,)
+    ).fetchone()
+    if not row:
+        return False
+    return abs(row[0] - os.path.getmtime(path)) < 1.0
+
+
+def index_file(conn: sqlite3.Connection, path: str) -> bool:
+    """Extrait et indexe un fichier. Retourne True si succès."""
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext == ".docx":
+            if not HAS_DOCX:
+                return False
+            text = extract_text_docx(path)
+        elif ext == ".pdf":
+            if not HAS_PDF:
+                return False
+            pages = extract_text_pdf(path)
+            text = " ".join(t for _, t in pages)
+        else:
+            return False
+    except Exception:
+        return False
+
+    if not text.strip():
+        return False
+
+    # Normaliser pour FTS (accents, apostrophes)
+    text_norm = remove_accents(text)
+    mtime = os.path.getmtime(path)
+
+    conn.execute("DELETE FROM fts WHERE path=?", (path,))
+    conn.execute("INSERT INTO fts(path, content) VALUES (?,?)",
+                 (path, text_norm))
+    conn.execute("""
+        INSERT INTO files(path, mtime, indexed) VALUES (?,?,1)
+        ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, indexed=1
+    """, (path, mtime))
+    return True
+
+
+def fts_search(conn: sqlite3.Connection, terms: list,
+               mode: str, case_sensitive: bool) -> list[dict]:
+    """Recherche dans l'index FTS5. Retourne liste de résultats."""
+    if not terms:
+        return []
+
+    # Construire la query FTS5
+    # Chaque terme peut être une phrase (guillemets) ou un mot
+    def fts_term(t):
+        # FTS5 : guillemets pour phrase exacte, sinon préfixe *
+        words = t.split()
+        if len(words) > 1:
+            return f'"{t}"'
+        return f'"{t}"'
+
+    if mode == "AND":
+        fts_query = " AND ".join(fts_term(t) for t in terms)
+    else:
+        fts_query = " OR ".join(fts_term(t) for t in terms)
+
+    try:
+        rows = conn.execute("""
+            SELECT path,
+                   snippet(fts, 1, '[', ']', '…', 25)
+            FROM fts
+            WHERE fts MATCH ?
+            ORDER BY rank
+        """, (fts_query,)).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+    results = []
+    for path, snippet in rows:
+        if not os.path.exists(path):
+            continue
+        term_label = " + ".join(terms) if mode == "AND" else terms[0]
+        results.append({
+            "file": path,
+            "term": term_label,
+            "context": snippet,
+            "page": None,
+            "ctrlf": re.sub(r"\[([^\]]+)\]", r"\1", snippet).replace("…", "").strip(),
+        })
+    return results
+
+
+def get_index_stats(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Retourne (nb_indexés, nb_total_dans_db)."""
+    row = conn.execute("SELECT COUNT(*) FROM files WHERE indexed=1").fetchone()
+    return row[0], row[0]
+
+
 def build_pattern(term: str, case_sensitive: bool, whole_word: bool):
     norm = remove_accents(term) if not case_sensitive else term
     words = re.split(r'\s+', norm.strip())
@@ -399,8 +524,8 @@ def search_file(path: str, terms: list, case_sensitive: bool,
                 best = [ms[0] for ms in page_matches.values()]
                 # Extrait brut autour du premier match pour Ctrl+F
                 m0 = best[0]
-                s = max(0, m0.start() - 20)
-                e = min(len(raw_text), m0.end() + 20)
+                s = max(0, m0.start() - 40)
+                e = min(len(raw_text), m0.end() + 40)
                 ctrlf = raw_text[s:e].replace("\n", " ").strip()
                 results.append({"file": path, "term": " + ".join(terms),
                                  "context": get_combined_context(raw_text, best),
@@ -417,9 +542,9 @@ def search_file(path: str, terms: list, case_sensitive: bool,
                 except re.error:
                     continue
                 for match in pat.finditer(search_text):
-                    # Extrait brut ~20 chars autour du match pour Ctrl+F Word
-                    s = max(0, match.start() - 20)
-                    e = min(len(raw_text), match.end() + 20)
+                    # Extrait brut ~40 chars autour du match pour Ctrl+F Word
+                    s = max(0, match.start() - 40)
+                    e = min(len(raw_text), match.end() + 40)
                     ctrlf = raw_text[s:e].replace("\n", " ").strip()
                     results.append({"file": path, "term": term,
                                      "context": get_context(raw_text, match),
@@ -442,6 +567,75 @@ def collect_files(folder: str, recurse: bool) -> list:
     return files
 
 # ── Thread de recherche ───────────────────────────────────────────────────────
+class IndexWorker(QThread):
+    """Thread d'indexation en arrière-plan."""
+    progress  = pyqtSignal(int, int, str)   # (done, total, filename)
+    finished  = pyqtSignal(int, int, int)   # (newly_indexed, total, total_indexed)
+
+    def __init__(self, folder, recurse):
+        super().__init__()
+        self.folder = folder
+        self.recurse = recurse
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def run(self):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        files = collect_files(self.folder, self.recurse)
+        total = len(files)
+        conn = get_db()
+
+        # Filtrer les fichiers non indexés ou obsolètes
+        to_index = [f for f in files if not is_indexed(conn, f)]
+        conn.close()
+
+        if not to_index:
+            self.finished.emit(0, total, total)
+            return
+
+        done = 0
+        indexed = 0
+        workers = min(8, os.cpu_count() or 4, max(1, len(to_index)))
+
+        def index_one(path):
+            local_conn = get_db()
+            result = False
+            try:
+                result = index_file(local_conn, path)
+                if not result:
+                    # Fichier vide ou illisible : marquer comme traité pour ne plus le retenter
+                    local_conn.execute("""
+                        INSERT INTO files(path, mtime, indexed) VALUES (?,?,0)
+                        ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime
+                    """, (path, os.path.getmtime(path)))
+                local_conn.commit()
+            except Exception:
+                pass
+            finally:
+                local_conn.close()
+            return result
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(index_one, p): p for p in to_index}
+            for future in as_completed(futures):
+                if self._stop:
+                    break
+                done += 1
+                path = futures[future]
+                try:
+                    if future.result():
+                        indexed += 1
+                except Exception:
+                    pass
+                self.progress.emit(done, len(to_index), os.path.basename(path))
+
+        # already_indexed = fichiers déjà OK avant cette session
+        already_indexed = total - len(to_index)
+        self.finished.emit(indexed, total, already_indexed + indexed)
+
+
 class SearchWorker(QThread):
     result_found  = pyqtSignal(dict)
     progress      = pyqtSignal(int, int, str)
@@ -465,33 +659,53 @@ class SearchWorker(QThread):
         files = collect_files(self.folder, self.recurse)
         total = len(files)
         count = 0
-        # Nombre de workers : min(8, nb_cœurs, nb_fichiers)
-        workers = min(8, os.cpu_count() or 4, max(1, total))
 
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(
-                    search_file, path, self.terms,
-                    self.case_sensitive, self.whole_word, self.mode
-                ): path
-                for path in files
-            }
-            done = 0
-            for future in as_completed(futures):
-                if self._stop:
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
-                done += 1
-                path = futures[future]
-                self.progress.emit(done, total, os.path.basename(path))
-                try:
-                    results = future.result()
-                except Exception as e:
-                    results = [{"file": path, "term": "ERREUR",
-                                "context": str(e), "page": None, "ctrlf": ""}]
-                for r in results:
+        # Séparer fichiers indexés / non indexés
+        conn = get_db()
+        indexed_files = [f for f in files if is_indexed(conn, f)]
+        not_indexed   = [f for f in files if f not in set(indexed_files)]
+        conn.close()
+
+        # ── 1. Recherche FTS5 sur les fichiers indexés ────────────────────
+        if indexed_files:
+            self.progress.emit(0, 1, "Recherche dans l'index FTS…")
+            conn = get_db()
+            fts_results = fts_search(conn, self.terms, self.mode, self.case_sensitive)
+            conn.close()
+            indexed_set = set(indexed_files)
+            for r in fts_results:
+                if r["file"] in indexed_set:
                     count += 1
                     self.result_found.emit(r)
+
+        # ── 2. Recherche directe sur les fichiers non indexés ─────────────
+        if not_indexed and not self._stop:
+            workers = min(8, os.cpu_count() or 4, max(1, len(not_indexed)))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(
+                        search_file, path, self.terms,
+                        self.case_sensitive, self.whole_word, self.mode
+                    ): path
+                    for path in not_indexed
+                }
+                done = 0
+                for future in as_completed(futures):
+                    if self._stop:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        break
+                    done += 1
+                    path = futures[future]
+                    self.progress.emit(done, len(not_indexed),
+                                       f"[non indexé] {os.path.basename(path)}")
+                    try:
+                        results = future.result()
+                    except Exception as e:
+                        results = [{"file": path, "term": "ERREUR",
+                                    "context": str(e), "page": None, "ctrlf": ""}]
+                    for r in results:
+                        count += 1
+                        self.result_found.emit(r)
 
         self.finished.emit(count, total)
 
@@ -610,9 +824,11 @@ class SearchApp(QMainWindow):
         self.setWindowTitle("Recherche dans Word / PDF")
         self.resize(1200, 750)
         self._worker: SearchWorker | None = None
+        self._idx_worker: IndexWorker | None = None
         self._model = ResultsModel()
         self._build_ui()
         self._load_config()
+        self._update_index_label()
         self._set_icon()
 
     def _set_icon(self):
@@ -708,12 +924,26 @@ class SearchApp(QMainWindow):
         self.btn_stop.setObjectName("btn_stop")
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self._stop_search)
+        self.btn_index = QPushButton("⚙  Indexer le dossier")
+        self.btn_index.setStyleSheet(f"""
+            QPushButton {{
+                background:{BG_INPUT}; border:1px solid {BORDER};
+                border-radius:6px; padding:8px 16px; color:{TEXT_MUTED};
+            }}
+            QPushButton:hover {{ background:{BORDER}; color:{TEXT_PRIMARY}; }}
+            QPushButton:disabled {{ color:#444; }}
+        """)
+        self.btn_index.clicked.connect(self._start_index)
         btn_clear = QPushButton("Effacer")
         btn_clear.clicked.connect(self._clear)
         btn_export = QPushButton("Exporter CSV")
         btn_export.clicked.connect(self._export_csv)
-        for b in (self.btn_search, self.btn_stop, btn_clear, btn_export):
+        for b in (self.btn_search, self.btn_stop, self.btn_index, btn_clear, btn_export):
             row_btns.addWidget(b)
+        # Indicateur d'index
+        self.lbl_index = QLabel("")
+        self.lbl_index.setStyleSheet(f"color:{TEXT_MUTED}; font-size:11px; padding-left:8px;")
+        row_btns.addWidget(self.lbl_index)
         row_btns.addStretch()
         root.addLayout(row_btns)
 
@@ -810,6 +1040,7 @@ class SearchApp(QMainWindow):
         cfg["folder"] = path
         save_config(cfg)
         self.status.showMessage(f"Dossier : {path}")
+        self._update_index_label()
 
     def _fav_context_menu(self, fav: dict, btn):
         from PyQt6.QtWidgets import QMenu
@@ -905,6 +1136,62 @@ class SearchApp(QMainWindow):
         if self._worker:
             self._worker.stop()
         self.status.showMessage("Arrêt en cours…")
+
+    def _start_index(self):
+        folder = self.inp_folder.text().strip()
+        if not folder or not os.path.isdir(folder):
+            self.status.showMessage("⚠  Dossier invalide.")
+            return
+        self.btn_index.setEnabled(False)
+        self.btn_search.setEnabled(False)
+        self.progress.show()
+        self.progress.setRange(0, 0)
+        self._idx_worker = IndexWorker(folder, self.chk_recurse.isChecked())
+        self._idx_worker.progress.connect(self._on_index_progress)
+        self._idx_worker.finished.connect(self._on_index_finished)
+        self._idx_worker.start()
+        self.status.showMessage("Indexation en cours…")
+
+    def _on_index_progress(self, done: int, total: int, filename: str):
+        self.progress.setRange(0, total)
+        self.progress.setValue(done)
+        self.status.showMessage(f"Indexation {done}/{total} : {filename}")
+
+    def _on_index_finished(self, indexed: int, total: int, total_indexed: int):
+        self.btn_index.setEnabled(True)
+        self.btn_search.setEnabled(True)
+        self.progress.hide()
+        self.progress.setRange(0, 0)
+        if indexed == 0:
+            self.status.showMessage(f"Index à jour — {total} fichier(s) déjà indexé(s).")
+        else:
+            self.status.showMessage(f"{indexed} fichier(s) indexé(s) sur {total}.")
+        if total_indexed == total:
+            self.lbl_index.setText(f"✅ Index à jour ({total} fichiers)")
+            self.lbl_index.setStyleSheet(f"color:{GREEN}; font-size:11px; padding-left:8px;")
+        else:
+            self.lbl_index.setText(f"⚠ {total_indexed}/{total} indexés")
+            self.lbl_index.setStyleSheet(f"color:{HIGHLIGHT}; font-size:11px; padding-left:8px;")
+
+    def _update_index_label(self):
+        folder = self.inp_folder.text().strip()
+        if not folder or not os.path.isdir(folder):
+            self.lbl_index.setText("")
+            return
+        files = collect_files(folder, self.chk_recurse.isChecked())
+        if not files:
+            self.lbl_index.setText("")
+            return
+        conn = get_db()
+        indexed = sum(1 for f in files if is_indexed(conn, f))
+        conn.close()
+        total = len(files)
+        if indexed == total:
+            self.lbl_index.setText(f"✅ Index à jour ({total} fichiers)")
+            self.lbl_index.setStyleSheet(f"color:{GREEN}; font-size:11px; padding-left:8px;")
+        else:
+            self.lbl_index.setText(f"⚠ {indexed}/{total} indexés")
+            self.lbl_index.setStyleSheet(f"color:{HIGHLIGHT}; font-size:11px; padding-left:8px;")
 
     def _on_result(self, r: dict):
         self._model.add_result(r)
