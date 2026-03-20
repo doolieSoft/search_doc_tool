@@ -17,7 +17,7 @@ Outil de recherche de termes dans des fichiers Word (.docx) et PDF, avec une int
 - Numéro de page pour les PDFs
 - Export des résultats en CSV
 - Système de favoris pour les dossiers fréquents
-- Recherche multi-threadée (l'interface reste réactive)
+- Recherche multi-threadée (l'interface reste réactive) — ~500 fichiers / 600 Mo traités en environ 3 minutes
 
 ## Prérequis
 
