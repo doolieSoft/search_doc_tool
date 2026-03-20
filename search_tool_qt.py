@@ -247,9 +247,7 @@ def save_favorites(favs: list):
 # ── Normalisation ────────────────────────────────────────────────────────────
 def remove_accents(s: str) -> str:
     # Normaliser les apostrophes typographiques → apostrophe droite
-    s = s.replace('’', "'").replace('‘', "'").replace('ʼ', "'")
-    # Supprimer les espaces autour des apostrophes (artefact Word)
-    s = re.sub(r"\s*'\s*", "'", s)
+    s = s.replace(‘’’, "’").replace(‘’’, "’").replace(‘ʼ’, "’")
     # Espaces insécables → espace normale
     s = s.replace(' ', ' ').replace(' ', ' ')
     # Supprimer les diacritiques
@@ -316,12 +314,19 @@ def extract_text_pdf(path: str) -> list[tuple[int, str]]:
     return pages
 
 # ── Contexte ─────────────────────────────────────────────────────────────────
+def _word_span(text: str, ts: int, te: int) -> tuple[int, int]:
+    """Étend te jusqu'à la fin du mot (lettres, chiffres, _ et -)."""
+    while te < len(text) and (text[te].isalnum() or text[te] in '_-'):
+        te += 1
+    return ts, te
+
 def get_context(text: str, match, window: int = 100) -> str:
     start = max(0, match.start() - window)
     end = min(len(text), match.end() + window)
     snippet = text[start:end].replace("\n", " ").strip()
     ts = match.start() - start
     te = match.end() - start
+    ts, te = _word_span(snippet, ts, te)
     snippet = snippet[:ts] + "[" + snippet[ts:te] + "]" + snippet[te:]
     return ("…" if start > 0 else "") + snippet + ("…" if end < len(text) else "")
 
@@ -341,6 +346,7 @@ def get_combined_context(text: str, matches: list, window: int = 100,
         for m in reversed(matches):
             ts = m.start() - offset
             te = m.end() - offset
+            ts, te = _word_span(snippet, ts, te)
             snippet = snippet[:ts] + "[" + snippet[ts:te] + "]" + snippet[te:]
         return ("…" if start > 0 else "") + snippet + ("…" if end < len(text) else "")
     else:

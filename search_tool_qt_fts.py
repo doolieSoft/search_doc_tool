@@ -253,9 +253,7 @@ def save_favorites(favs: list):
 # ── Normalisation ────────────────────────────────────────────────────────────
 def remove_accents(s: str) -> str:
     # Normaliser les apostrophes typographiques → apostrophe droite
-    s = s.replace('’', "'").replace('‘', "'").replace('ʼ', "'")
-    # Supprimer les espaces autour des apostrophes (artefact Word)
-    s = re.sub(r"\s*'\s*", "'", s)
+    s = s.replace('\u2018', "'").replace('\u2019', "'").replace('\u02bc', "'")
     # Espaces insécables → espace normale
     s = s.replace(' ', ' ').replace(' ', ' ')
     # Supprimer les diacritiques
@@ -322,12 +320,19 @@ def extract_text_pdf(path: str) -> list[tuple[int, str]]:
     return pages
 
 # ── Contexte ─────────────────────────────────────────────────────────────────
+def _word_span(text: str, ts: int, te: int) -> tuple[int, int]:
+    """Étend te jusqu'à la fin du mot (lettres, chiffres, _ et -)."""
+    while te < len(text) and (text[te].isalnum() or text[te] in '_-'):
+        te += 1
+    return ts, te
+
 def get_context(text: str, match, window: int = 100) -> str:
     start = max(0, match.start() - window)
     end = min(len(text), match.end() + window)
     snippet = text[start:end].replace("\n", " ").strip()
     ts = match.start() - start
     te = match.end() - start
+    ts, te = _word_span(snippet, ts, te)
     snippet = snippet[:ts] + "[" + snippet[ts:te] + "]" + snippet[te:]
     return ("…" if start > 0 else "") + snippet + ("…" if end < len(text) else "")
 
@@ -347,6 +352,7 @@ def get_combined_context(text: str, matches: list, window: int = 100,
         for m in reversed(matches):
             ts = m.start() - offset
             te = m.end() - offset
+            ts, te = _word_span(snippet, ts, te)
             snippet = snippet[:ts] + "[" + snippet[ts:te] + "]" + snippet[te:]
         return ("…" if start > 0 else "") + snippet + ("…" if end < len(text) else "")
     else:
@@ -369,7 +375,7 @@ def get_db() -> sqlite3.Connection:
     """)
     conn.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS fts
-        USING fts5(path UNINDEXED, content, tokenize='unicode61')
+        USING fts5(path UNINDEXED, content, tokenize='trigram')
     """)
     conn.commit()
     return conn
@@ -429,11 +435,11 @@ def fts_search(conn: sqlite3.Connection, terms: list,
     # Construire la query FTS5
     # Chaque terme peut être une phrase (guillemets) ou un mot
     def fts_term(t):
-        # FTS5 : guillemets pour phrase exacte, sinon préfixe *
+        # FTS5 trigram : sous-chaîne native, guillemets pour phrase exacte multi-mots
         words = t.split()
         if len(words) > 1:
             return f'"{t}"'
-        return f'"{t}"'
+        return t
 
     if mode == "AND":
         fts_query = " AND ".join(fts_term(t) for t in terms)
@@ -443,7 +449,8 @@ def fts_search(conn: sqlite3.Connection, terms: list,
     try:
         rows = conn.execute("""
             SELECT path,
-                   snippet(fts, 1, '[', ']', '…', 25)
+                   snippet(fts, 1, '[', ']', '…', 25),
+                   snippet(fts, 1, '', '', '', 5)
             FROM fts
             WHERE fts MATCH ?
             ORDER BY rank
@@ -452,16 +459,16 @@ def fts_search(conn: sqlite3.Connection, terms: list,
         return []
 
     results = []
-    for path, snippet in rows:
+    for path, snippet_display, snippet_ctrlf in rows:
         if not os.path.exists(path):
             continue
         term_label = " + ".join(terms) if mode == "AND" else terms[0]
         results.append({
             "file": path,
             "term": term_label,
-            "context": snippet,
+            "context": snippet_display,
             "page": None,
-            "ctrlf": re.sub(r"\[([^\]]+)\]", r"\1", snippet).replace("…", "").strip(),
+            "ctrlf": snippet_ctrlf.strip(),
         })
     return results
 
@@ -524,8 +531,8 @@ def search_file(path: str, terms: list, case_sensitive: bool,
                 best = [ms[0] for ms in page_matches.values()]
                 # Extrait brut autour du premier match pour Ctrl+F
                 m0 = best[0]
-                s = max(0, m0.start() - 40)
-                e = min(len(raw_text), m0.end() + 40)
+                s = max(0, m0.start() - 20)
+                e = min(len(raw_text), m0.end() + 20)
                 ctrlf = raw_text[s:e].replace("\n", " ").strip()
                 results.append({"file": path, "term": " + ".join(terms),
                                  "context": get_combined_context(raw_text, best),
@@ -543,8 +550,8 @@ def search_file(path: str, terms: list, case_sensitive: bool,
                     continue
                 for match in pat.finditer(search_text):
                     # Extrait brut ~40 chars autour du match pour Ctrl+F Word
-                    s = max(0, match.start() - 40)
-                    e = min(len(raw_text), match.end() + 40)
+                    s = max(0, match.start() - 20)
+                    e = min(len(raw_text), match.end() + 20)
                     ctrlf = raw_text[s:e].replace("\n", " ").strip()
                     results.append({"file": path, "term": term,
                                      "context": get_context(raw_text, match),
@@ -666,28 +673,28 @@ class SearchWorker(QThread):
         not_indexed   = [f for f in files if f not in set(indexed_files)]
         conn.close()
 
-        # ── 1. Recherche FTS5 sur les fichiers indexés ────────────────────
+        # ── 1. FTS5 : identifier rapidement quels fichiers indexés matchent ──
+        fts_matched = set()
         if indexed_files:
             self.progress.emit(0, 1, "Recherche dans l'index FTS…")
             conn = get_db()
             fts_results = fts_search(conn, self.terms, self.mode, self.case_sensitive)
             conn.close()
             indexed_set = set(indexed_files)
-            for r in fts_results:
-                if r["file"] in indexed_set:
-                    count += 1
-                    self.result_found.emit(r)
+            fts_matched = {r["file"] for r in fts_results if r["file"] in indexed_set}
 
-        # ── 2. Recherche directe sur les fichiers non indexés ─────────────
-        if not_indexed and not self._stop:
-            workers = min(8, os.cpu_count() or 4, max(1, len(not_indexed)))
+        # ── 2. Recherche regex complète sur les fichiers matchés par FTS5
+        #       + les fichiers non indexés ────────────────────────────────────
+        to_search = [f for f in indexed_files if f in fts_matched] + not_indexed
+        if to_search and not self._stop:
+            workers = min(8, os.cpu_count() or 4, max(1, len(to_search)))
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = {
                     executor.submit(
                         search_file, path, self.terms,
                         self.case_sensitive, self.whole_word, self.mode
                     ): path
-                    for path in not_indexed
+                    for path in to_search
                 }
                 done = 0
                 for future in as_completed(futures):
@@ -696,8 +703,8 @@ class SearchWorker(QThread):
                         break
                     done += 1
                     path = futures[future]
-                    self.progress.emit(done, len(not_indexed),
-                                       f"[non indexé] {os.path.basename(path)}")
+                    self.progress.emit(done, len(to_search),
+                                       os.path.basename(path))
                     try:
                         results = future.result()
                     except Exception as e:
@@ -830,6 +837,7 @@ class SearchApp(QMainWindow):
         self._load_config()
         self._update_index_label()
         self._set_icon()
+        self.inp_terms.setFocus()
 
     def _set_icon(self):
         import base64
@@ -1108,6 +1116,10 @@ class SearchApp(QMainWindow):
 
         terms, mode = parse_query(terms_raw)
         if not terms:
+            return
+        short = [t for t in terms if len(t) < 3]
+        if short:
+            self.status.showMessage(f"⚠  Terme trop court (3 caractères minimum) : {', '.join(short)}")
             return
 
         cfg = load_config()
