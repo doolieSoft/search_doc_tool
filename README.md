@@ -2,6 +2,8 @@
 
 Outil de recherche de termes dans des fichiers Word (.docx) et PDF, avec une interface graphique moderne en mode sombre.
 
+![Aperçu de l'application](screenshots/search_doc_tool.png)
+
 ## Fonctionnalités
 
 - Recherche dans des fichiers `.docx` et `.pdf` (récursivement ou non)
