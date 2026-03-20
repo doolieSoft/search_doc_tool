@@ -1,54 +1,56 @@
 # Search Doc Tool
 
-Outil de recherche de termes dans des fichiers Word (.docx) et PDF, avec une interface graphique moderne en mode sombre.
+*[Lire en français](README.fr.md)*
 
-![Aperçu de l'application](screenshots/search_doc_tool.png)
+A tool for searching terms across Word (.docx) and PDF files, with a modern dark-mode GUI.
 
-## Fonctionnalités
+![Application preview](screenshots/search_doc_tool.png)
 
-- Recherche dans des fichiers `.docx` et `.pdf` (récursivement ou non)
-- Syntaxe de requête avancée :
-  - Mots séparés par des espaces → mode **OU** (au moins un terme)
-  - Opérateur `+` → mode **ET** (tous les termes présents dans le fichier)
-  - `"phrase exacte"` → recherche de la phrase littérale
-- Recherche insensible aux accents par défaut
-- Options : sensibilité à la casse, correspondance sur mot entier
-- Affichage du contexte autour de chaque occurrence (terme mis en évidence)
-- Numéro de page pour les PDFs
-- Export des résultats en CSV
-- Système de favoris pour les dossiers fréquents
-- Recherche multi-threadée (l'interface reste réactive) — ~500 fichiers / 600 Mo traités en environ 3 minutes
+## Features
 
-## Prérequis
+- Search through `.docx` and `.pdf` files (recursively or not)
+- Advanced query syntax:
+  - Space-separated words → **OR** mode (at least one term)
+  - `+` operator → **AND** mode (all terms must be present in the file)
+  - `"exact phrase"` → literal phrase search
+- Accent-insensitive search by default
+- Options: case sensitivity, whole-word matching
+- Context display around each match (highlighted term)
+- Page number for PDFs
+- CSV export
+- Favorites system for frequently used folders
+- Multi-threaded search (UI stays responsive) — ~500 files / 600 MB processed in about 3 minutes
+
+## Requirements
 
 - Python 3.12+
-- Dépendances :
+- Dependencies:
 
 ```bash
 pip install PyQt6 python-docx pymupdf
 ```
 
-## Lancement
+## Running
 
 ```bash
-# Interface PyQt6 (recommandée)
+# PyQt6 interface (recommended)
 python search_tool_qt.py
 
-# Interface alternative Tkinter
+# Alternative Tkinter interface
 python search_tool_tkinter.py
 ```
 
-## Utilisation
+## Usage
 
-1. Sélectionner un dossier contenant les documents à parcourir
-2. Saisir un ou plusieurs termes dans la barre de recherche
-3. Lancer la recherche — les résultats s'affichent en temps réel
-4. Double-cliquer sur un résultat pour ouvrir le fichier :
-   - **PDF** : ouvre à la page correspondante (SumatraPDF ou Adobe Reader)
-   - **DOCX** : copie le contexte dans le presse-papiers pour un Ctrl+F rapide
+1. Select a folder containing the documents to search
+2. Enter one or more terms in the search bar
+3. Start the search — results appear in real time
+4. Double-click a result to open the file:
+   - **PDF**: opens at the matching page (SumatraPDF or Adobe Reader)
+   - **DOCX**: copies the context to the clipboard for quick Ctrl+F
 
-Les dossiers fréquemment utilisés peuvent être sauvegardés dans les **favoris** (clic droit pour renommer ou supprimer).
+Frequently used folders can be saved as **favorites** (right-click to rename or delete).
 
 ## Configuration
 
-La configuration est sauvegardée automatiquement dans `~/.search_tool_config.json` (dernier dossier utilisé, favoris).
+Configuration is automatically saved to `~/.search_tool_config.json` (last used folder, favorites).
