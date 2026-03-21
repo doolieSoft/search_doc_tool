@@ -44,15 +44,18 @@ _reset_running_on_startup()
 
 # ── Per-user per-folder DB path ───────────────────────────────────────────────
 
-def _get_folder_db_path(folder: str) -> str:
-    """Return the shared per-folder SQLite DB path, creating directories as needed."""
-    # Normalize path: consistent slashes + lowercase (Windows is case-insensitive)
+def _get_folder_paths(folder: str) -> dict:
+    """Return all per-folder data paths (db, pdf_cache, docx_copy), creating dirs as needed."""
     normalized = os.path.normpath(folder).lower()
     folder_hash = hashlib.md5(normalized.encode("utf-8")).hexdigest()[:10]
     folder_name = re.sub(r"[^\w\-]", "_", os.path.basename(normalized) or "root")
-    db_dir = Path(settings.DATA_DIR) / "folders" / f"{folder_name}_{folder_hash}"
-    db_dir.mkdir(parents=True, exist_ok=True)
-    return str(db_dir / "index.db")
+    base_dir = Path(settings.DATA_DIR) / "folders" / f"{folder_name}_{folder_hash}"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "db":         str(base_dir / "index.db"),
+        "pdf_cache":  str(base_dir / "pdf_cache"),
+        "docx_copy":  str(base_dir / "docx_copy"),
+    }
 
 
 # ── Background indexing state ────────────────────────────────────────────────
@@ -111,42 +114,59 @@ def _run_indexing(folder: str, recurse: bool, db_file: str):
         _persist_status(running=False, finished_at=timezone.now())
         return
 
-    # ── Phase 1 : convert DOCX → PDF in parallel ─────────────────────────────
+    # ── Phase 1 : convert DOCX → PDF ─────────────────────────────────────────
     pdf_ready = []  # paths ready to index (original PDFs + successfully converted)
 
     if docx_to_convert:
-        lo_workers = min(2, len(docx_to_convert))
+        from .services.converter import is_word_available, WordConverter
 
-        def _convert(path):
-            return path, convert_docx_to_pdf(path, settings.PDF_CACHE_DIR,
-                                              getattr(settings, "DOCX_COPY_DIR", None))
+        folder_paths = _get_folder_paths(folder)
+        pdf_cache = folder_paths["pdf_cache"]
+        docx_copy = folder_paths["docx_copy"]
 
-        with ThreadPoolExecutor(max_workers=lo_workers) as executor:
-            futures = {executor.submit(_convert, p): p for p in docx_to_convert}
-            for future in as_completed(futures):
-                if not _index_state["running"]:
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    return
-                path = futures[future]
-                try:
-                    _, pdf_path = future.result()
-                except RuntimeError as e:
+        if is_word_available():
+            # ── Word COM : séquentiel avec instance unique (plus rapide) ──────
+            with WordConverter() as wc:
+                for path in docx_to_convert:
+                    if not _index_state["running"]:
+                        return
+                    wc.convert(path, pdf_cache, docx_copy)
                     with _index_lock:
-                        _index_state["error"] = str(e)
-                        _index_state["running"] = False
-                    _persist_status(running=False, error=str(e), finished_at=timezone.now())
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    return
-                except Exception:
-                    pdf_path = None
-                with _index_lock:
-                    _index_state["conv_done"] += 1
-                    _index_state["current"] = os.path.basename(path)
-                if pdf_path:
+                        _index_state["conv_done"] += 1
+                        _index_state["current"] = os.path.basename(path)
+                    # Always queue for phase 2: index_file will use cached PDF or
+                    # fall back to LibreOffice if Word COM failed on this file.
                     pdf_ready.append(path)
-                else:
+        else:
+            # ── LibreOffice : parallèle avec profils isolés ───────────────────
+            lo_workers = min(2, len(docx_to_convert))
+
+            def _convert(path):
+                return path, convert_docx_to_pdf(path, pdf_cache, docx_copy)
+
+            with ThreadPoolExecutor(max_workers=lo_workers) as executor:
+                futures = {executor.submit(_convert, p): p for p in docx_to_convert}
+                for future in as_completed(futures):
+                    if not _index_state["running"]:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        return
+                    path = futures[future]
+                    try:
+                        future.result()
+                    except RuntimeError as e:
+                        with _index_lock:
+                            _index_state["error"] = str(e)
+                            _index_state["running"] = False
+                        _persist_status(running=False, error=str(e), finished_at=timezone.now())
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        return
+                    except Exception:
+                        pass
                     with _index_lock:
-                        _index_state["failed"] += 1
+                        _index_state["conv_done"] += 1
+                        _index_state["current"] = os.path.basename(path)
+                    # Always queue for phase 2 (same reason as above)
+                    pdf_ready.append(path)
 
     pdf_ready.extend(pdf_direct)
 
@@ -158,7 +178,7 @@ def _run_indexing(folder: str, recurse: bool, db_file: str):
 
     def index_one(path):
         from .services.index import index_file as _index_file
-        return _index_file(path, db_file, settings.PDF_CACHE_DIR)
+        return _index_file(path, db_file, _get_folder_paths(folder)["pdf_cache"])
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(index_one, p): p for p in pdf_ready}
@@ -279,7 +299,8 @@ def search_view(request):
     files = collect_files(folder, recurse)
 
     # FTS5 pre-filter
-    db_file = _get_folder_db_path(folder)
+    fpaths = _get_folder_paths(folder)
+    db_file = fpaths["db"]
     conn = get_db(db_file)
     indexed_set = {f for f in files if is_indexed(conn, f)}
     conn.close()
@@ -297,7 +318,7 @@ def search_view(request):
                 executor.submit(
                     search_file, path, terms,
                     case_sensitive, whole_word, mode,
-                    settings.PDF_CACHE_DIR,
+                    fpaths["pdf_cache"],
                 ): path
                 for path in to_search
             }
@@ -311,9 +332,11 @@ def search_view(request):
                 all_results.extend(results)
 
     # Enrich results for template
+    folder_encoded = _encode_path(folder)
     for r in all_results:
         r["filename"] = os.path.basename(r["file"])
         r["file_encoded"] = _encode_path(r["file"])
+        r["folder_encoded"] = folder_encoded
         r["context_html"] = _highlight_context(r["context"])
 
     return render(request, "search_tool/_results.html", {
@@ -332,13 +355,16 @@ def start_index(request):
     if not folder or not os.path.isdir(folder):
         return JsonResponse({"error": "Dossier invalide."}, status=400)
 
-    db_file = _get_folder_db_path(folder)
+    db_file = _get_folder_paths(folder)["db"]
 
     with _index_lock:
         if _index_state["running"]:
             return JsonResponse({"error": "Indexation déjà en cours."}, status=409)
         _index_state = {
             "running": True,
+            "phase": "",
+            "conv_done": 0,
+            "conv_total": 0,
             "done": 0,
             "total": 0,
             "current": "",
@@ -378,7 +404,7 @@ def index_summary(request):
     recurse = request.GET.get("recurse", "true") == "true"
     if not folder or not os.path.isdir(folder):
         return JsonResponse({"total": 0, "indexed": 0})
-    db_file = _get_folder_db_path(folder)
+    db_file = _get_folder_paths(folder)["db"]
     summary = _get_index_summary(folder, recurse, db_file)
     return JsonResponse(summary)
 
@@ -392,7 +418,7 @@ def index_unindexed(request):
     if not folder or not os.path.isdir(folder):
         return JsonResponse({"files": []})
     files = collect_files(folder, recurse)
-    db_file = _get_folder_db_path(folder)
+    db_file = _get_folder_paths(folder)["db"]
     conn = get_db(db_file)
     unindexed = [f for f in files if not is_indexed(conn, f)]
     conn.close()
@@ -403,6 +429,7 @@ def index_unindexed(request):
 @login_required
 def serve_pdf(request):
     encoded = request.GET.get("path", "")
+    folder_encoded = request.GET.get("folder", "")
     term = request.GET.get("term", "").strip()
     try:
         page_num = int(request.GET.get("page", 1))
@@ -411,14 +438,17 @@ def serve_pdf(request):
 
     try:
         original_path = _decode_path(encoded)
+        folder = _decode_path(folder_encoded) if folder_encoded else ""
     except Exception:
         return HttpResponseNotFound()
+
+    pdf_cache_dir = _get_folder_paths(folder)["pdf_cache"] if folder else settings.PDF_CACHE_DIR
 
     ext = os.path.splitext(original_path)[1].lower()
     if ext == ".pdf":
         serve_path = original_path
     elif ext == ".docx":
-        serve_path = get_pdf_cache_path(original_path, settings.PDF_CACHE_DIR)
+        serve_path = get_pdf_cache_path(original_path, pdf_cache_dir)
     else:
         return HttpResponseNotFound()
 

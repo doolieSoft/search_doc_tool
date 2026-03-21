@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Search Doc Tool</title>
   <link rel="icon" type="image/svg+xml" href="{% static 'search_tool/favicon.svg' %}">
-  <link rel="stylesheet" href="{% static 'search_tool/style.css' %}?v=12">
+  <link rel="stylesheet" href="{% static 'search_tool/style.css' %}?v=13">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
   <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
 </head>
@@ -195,6 +195,8 @@
             document.getElementById('btn-search').disabled = false;
             document.getElementById('btn-index').disabled = false;
             document.getElementById('btn-stop').style.display = 'none';
+            const banner = document.getElementById('global-index-banner');
+            if (banner) banner.style.display = 'none';
 
             let msg = '✅ ' + data.newly_indexed + ' fichier(s) indexé(s)';
             if (data.newly_indexed === 0 && data.failed === 0) {

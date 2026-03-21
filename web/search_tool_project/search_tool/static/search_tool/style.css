@@ -247,6 +247,20 @@ button, .btn-secondary, .btn-search, .btn-index {
 .index-badge.clickable { cursor: pointer; border-bottom: 1px dotted currentColor; }
 .index-badge.clickable:hover { opacity: 0.75; }
 
+/* ── Global index banner ───────────────────────────────────────────────── */
+.global-index-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+}
+.global-index-banner i { color: var(--accent); }
+.global-index-banner { margin-bottom: 12px; }
+
 /* ── Progress ──────────────────────────────────────────────────────────── */
 .progress-wrap {
   display: flex;

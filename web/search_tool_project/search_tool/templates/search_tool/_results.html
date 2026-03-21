@@ -20,7 +20,7 @@
       <td>
         {% if r.term != 'ERREUR' %}
         <a class="file-link"
-           href="/serve/?path={{ r.file_encoded }}{% if r.page %}&term={{ r.term|urlencode }}&page={{ r.page }}#page={{ r.page }}{% endif %}"
+           href="/serve/?path={{ r.file_encoded }}&folder={{ r.folder_encoded }}{% if r.page %}&term={{ r.term|urlencode }}&page={{ r.page }}#page={{ r.page }}{% endif %}"
            target="_blank"
            title="{{ r.file }}">
           {{ r.filename }}

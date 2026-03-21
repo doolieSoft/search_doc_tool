@@ -41,6 +41,10 @@
       <h1><i class="fa-solid fa-magnifying-glass"></i> Search Doc Tool</h1>
       <p class="subtitle">Recherche dans vos fichiers Word &amp; PDF</p>
     </header>
+    <div id="global-index-banner" class="global-index-banner" style="display:none">
+      <i class="fa-solid fa-gear fa-spin"></i>
+      <span id="global-index-banner-text"></span>
+    </div>
 
     <main class="app-main">
       <form method="post" action="/search/" id="search-form"
@@ -240,11 +244,22 @@
           if (!indexPollTimer) {
             indexPollTimer = setInterval(pollIndexStatus, 500);
           }
+        } else if (data.running) {
+          // Autre dossier en cours d'indexation : on ne peut pas en lancer un autre
+          document.getElementById('index-status-row').style.display = 'none';
+          document.getElementById('btn-stop').style.display = 'none';
+          document.getElementById('btn-index').disabled = true;
+          document.getElementById('btn-search').disabled = false;
+          const banner = document.getElementById('global-index-banner');
+          document.getElementById('global-index-banner-text').textContent =
+            'Indexation en cours sur : ' + data.folder;
+          banner.style.display = 'flex';
         } else {
           document.getElementById('index-status-row').style.display = 'none';
           document.getElementById('btn-stop').style.display = 'none';
           document.getElementById('btn-index').disabled = false;
           document.getElementById('btn-search').disabled = false;
+          document.getElementById('global-index-banner').style.display = 'none';
         }
       })
       .catch(() => {

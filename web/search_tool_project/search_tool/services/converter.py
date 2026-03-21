@@ -57,6 +57,130 @@ def is_encrypted_docx(docx_path: str) -> bool:
         return False
 
 
+_word_available: bool | None = None
+
+
+def is_word_available() -> bool:
+    """Check once if Microsoft Word COM automation is available on this machine."""
+    global _word_available
+    if _word_available is not None:
+        return _word_available
+    try:
+        import pythoncom
+        import win32com.client
+        pythoncom.CoInitialize()
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Quit()
+        pythoncom.CoUninitialize()
+        _word_available = True
+        logger.info("Microsoft Word disponible — conversion DOCX→PDF via Word COM")
+    except Exception:
+        _word_available = False
+        logger.info("Microsoft Word non disponible — conversion via LibreOffice")
+    return _word_available
+
+
+_WORD_RESTART_EVERY = 50  # restart Word instance every N files to prevent memory buildup
+
+
+class WordConverter:
+    """
+    Context manager for batch DOCX→PDF conversion using a single Word instance.
+    Much faster than LibreOffice: no per-file startup cost.
+    Auto-restarts on error or every WORD_RESTART_EVERY files.
+    Usage:
+        with WordConverter() as wc:
+            pdf_path = wc.convert(docx_path, cache_dir, docx_copy_dir)
+    """
+
+    def __enter__(self):
+        import pythoncom
+        pythoncom.CoInitialize()
+        self._count = 0
+        self._word = self._new_instance()
+        return self
+
+    def __exit__(self, *args):
+        self._quit()
+        try:
+            import pythoncom
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+    def _new_instance(self):
+        import win32com.client
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0  # wdAlertsNone
+        return word
+
+    def _quit(self):
+        try:
+            self._word.Quit()
+        except Exception:
+            pass
+
+    def _restart(self):
+        self._quit()
+        self._word = self._new_instance()
+        self._count = 0
+        logger.info("Instance Word redémarrée")
+
+    def convert(self, docx_path: str, cache_dir: str,
+                docx_copy_dir: str | None = None) -> str | None:
+        """Convert one DOCX to PDF. Returns cached PDF path or None on failure."""
+        os.makedirs(cache_dir, exist_ok=True)
+        pdf_cache_path = get_pdf_cache_path(docx_path, cache_dir)
+
+        if is_cache_fresh(docx_path, pdf_cache_path):
+            return pdf_cache_path
+
+        # Periodic restart to prevent memory buildup
+        if self._count > 0 and self._count % _WORD_RESTART_EVERY == 0:
+            self._restart()
+
+        docx_path = os.path.normpath(docx_path)
+
+        if docx_copy_dir:
+            os.makedirs(docx_copy_dir, exist_ok=True)
+            local_docx = get_docx_copy_path(docx_path, docx_copy_dir)
+        else:
+            local_docx = None
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            if local_docx is None:
+                local_docx = os.path.join(tmp_dir, os.path.basename(docx_path))
+            try:
+                shutil.copy2(docx_path, local_docx)
+            except OSError as e:
+                logger.warning("Cannot copy %s locally: %s", docx_path, e)
+                return None
+
+            try:
+                doc = self._word.Documents.Open(
+                    os.path.abspath(local_docx),
+                    ReadOnly=True,
+                    AddToRecentFiles=False,
+                )
+                try:
+                    doc.SaveAs2(os.path.abspath(pdf_cache_path), FileFormat=17)
+                finally:
+                    try:
+                        doc.Close(SaveChanges=False)
+                    except Exception:
+                        pass
+                self._count += 1
+                return pdf_cache_path
+            except Exception as e:
+                if is_encrypted_docx(local_docx):
+                    logger.warning("Skipping encrypted DOCX: %s", docx_path)
+                else:
+                    logger.warning("Word COM échec pour %s : %s — redémarrage Word", docx_path, e)
+                    self._restart()
+                return None
+
+
 def convert_docx_to_pdf(docx_path: str, cache_dir: str,
                         docx_copy_dir: str | None = None) -> str | None:
     """
