@@ -14,4 +14,8 @@ urlpatterns = [
     path("favorites/add/", views.add_favorite, name="add_favorite"),
     path("favorites/remove/", views.remove_favorite, name="remove_favorite"),
     path("favorites/rename/", views.rename_favorite, name="rename_favorite"),
+    path("favorites/move/", views.move_favorite, name="move_favorite"),
+    path("favorites/groups/create/", views.create_group, name="create_group"),
+    path("favorites/groups/delete/", views.delete_group, name="delete_group"),
+    path("favorites/groups/rename/", views.rename_group, name="rename_group"),
 ]

@@ -11,10 +11,10 @@ import fitz  # PyMuPDF
 from django.conf import settings
 from django.http import FileResponse, HttpResponse, HttpResponseNotFound, JsonResponse
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_GET, require_POST
 
-from .models import Favorite, IndexingStatus
+from .models import Favorite, FavoriteGroup, IndexingStatus
 from .services.config import load_config, save_config
 from .services.converter import get_pdf_cache_path
 from .services.index import fts_search, get_db, index_file, is_indexed
@@ -258,9 +258,19 @@ def _get_index_summary(folder: str, recurse: bool, db_file: str) -> dict:
 def index_view(request):
     cfg = load_config()
     recurse = cfg.get("recurse", True)
+    from django.db.models import Prefetch
+    groups = (
+        FavoriteGroup.objects
+        .filter(user=request.user)
+        .prefetch_related(
+            Prefetch("favorites", queryset=Favorite.objects.filter(user=request.user))
+        )
+    )
+    ungrouped = Favorite.objects.filter(user=request.user, group=None)
     return render(request, "search_tool/index.html", {
         "config": {"recurse": recurse},
-        "favorites": Favorite.objects.filter(user=request.user),
+        "groups": groups,
+        "ungrouped_favorites": ungrouped,
         "index_summary": {},
     })
 
@@ -551,4 +561,48 @@ def rename_favorite(request):
     if not path or not name:
         return JsonResponse({"error": "invalid"}, status=400)
     Favorite.objects.filter(user=request.user, path=path).update(name=name)
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
+def create_group(request):
+    name = request.POST.get("name", "").strip()
+    if not name:
+        return JsonResponse({"error": "Nom requis"}, status=400)
+    FavoriteGroup.objects.get_or_create(user=request.user, name=name)
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
+def delete_group(request):
+    group_id = request.POST.get("group_id", "").strip()
+    FavoriteGroup.objects.filter(user=request.user, pk=group_id).delete()
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
+def rename_group(request):
+    group_id = request.POST.get("group_id", "").strip()
+    name = request.POST.get("name", "").strip()
+    if not group_id or not name:
+        return JsonResponse({"error": "invalid"}, status=400)
+    FavoriteGroup.objects.filter(user=request.user, pk=group_id).update(name=name)
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_POST
+def move_favorite(request):
+    path = request.POST.get("path", "").strip()
+    group_id = request.POST.get("group_id", "").strip()
+    if not path:
+        return JsonResponse({"error": "invalid"}, status=400)
+    if group_id:
+        group = get_object_or_404(FavoriteGroup, user=request.user, pk=group_id)
+        Favorite.objects.filter(user=request.user, path=path).update(group=group)
+    else:
+        Favorite.objects.filter(user=request.user, path=path).update(group=None)
     return JsonResponse({"ok": True})

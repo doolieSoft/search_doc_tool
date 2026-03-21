@@ -7,14 +7,18 @@
   <aside class="sidebar">
     <div class="sidebar-header">
       <span class="sidebar-title"><i class="fa-solid fa-star"></i> Favoris</span>
+      <button type="button" class="btn-new-group" onclick="createGroup()" title="Nouveau dossier">
+        <i class="fa-solid fa-folder-plus"></i>
+      </button>
     </div>
-    <ul class="sidebar-list">
-      {% for fav in favorites %}
-      <li class="sidebar-item">
+
+    <!-- Favoris sans dossier -->
+    <ul class="sidebar-list drop-zone" data-drop-group="">
+      {% for fav in ungrouped_favorites %}
+      <li class="sidebar-item" data-path="{{ fav.path }}">
         <button type="button" class="sidebar-fav-btn"
-                onclick="const el=document.getElementById('id_folder');el.value='{{ fav.path|escapejs }}';el.dispatchEvent(new Event('input'))"
-                title="{{ fav.path }}"
-                data-path="{{ fav.path|escapejs }}">
+                onclick="selectFolder('{{ fav.path|escapejs }}')"
+                title="{{ fav.path }}">
           <i class="fa-solid fa-folder"></i> <span class="fav-label">{{ fav.name }}</span>
         </button>
         <button type="button" class="sidebar-fav-rename" title="Renommer"
@@ -27,9 +31,51 @@
         </button>
       </li>
       {% empty %}
-      <li class="sidebar-empty">Aucun favori</li>
+      <li class="sidebar-drop-hint">Aucun favori</li>
       {% endfor %}
     </ul>
+
+    <!-- Dossiers de favoris -->
+    {% for group in groups %}
+    <div class="sidebar-group" data-group-id="{{ group.id }}">
+      <div class="sidebar-group-header drop-zone" data-drop-group="{{ group.id }}">
+        <button type="button" class="sidebar-group-toggle" onclick="toggleGroup({{ group.id }})">
+          <i class="fa-solid fa-folder"></i>
+          <span class="group-label">{{ group.name }}</span>
+          <i class="fa-solid fa-chevron-down group-arrow"></i>
+        </button>
+        <button type="button" class="sidebar-fav-rename" title="Renommer"
+                onclick="renameGroup({{ group.id }}, this)">
+          <i class="fa-solid fa-pen"></i>
+        </button>
+        <button type="button" class="sidebar-fav-remove" title="Supprimer"
+                onclick="deleteGroup({{ group.id }})">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <ul class="sidebar-list sidebar-group-items drop-zone" data-drop-group="{{ group.id }}">
+        {% for fav in group.favorites.all %}
+        <li class="sidebar-item" data-path="{{ fav.path|escapejs }}">
+          <button type="button" class="sidebar-fav-btn"
+                  onclick="selectFolder('{{ fav.path|escapejs }}')"
+                  title="{{ fav.path }}">
+            <i class="fa-solid fa-folder"></i> <span class="fav-label">{{ fav.name }}</span>
+          </button>
+          <button type="button" class="sidebar-fav-rename" title="Renommer"
+                  onclick="renameFavorite('{{ fav.path|escapejs }}', this)">
+            <i class="fa-solid fa-pen"></i>
+          </button>
+          <button type="button" class="sidebar-fav-remove" title="Supprimer"
+                  onclick="removeFavorite('{{ fav.path|escapejs }}')">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </li>
+        {% empty %}
+        <li class="sidebar-drop-hint">Glisser un favori ici</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
   </aside>
 
   <!-- Resize handle -->
@@ -367,6 +413,12 @@
     });
   }
 
+  function selectFolder(path) {
+    const el = document.getElementById('id_folder');
+    el.value = path;
+    el.dispatchEvent(new Event('input'));
+  }
+
   function addFavorite() {
     const folder = document.getElementById('id_folder').value.trim();
     if (!folder) return;
@@ -385,5 +437,155 @@
     fetch('/favorites/remove/', {method: 'POST', body: fd})
       .then(() => location.reload());
   }
+
+  // ── Groupes de favoris ───────────────────────────────────────────────────
+
+  function createGroup() {
+    const name = prompt('Nom du dossier :');
+    if (!name || !name.trim()) return;
+    const fd = new FormData();
+    fd.append('name', name.trim());
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+    fetch('/favorites/groups/create/', {method: 'POST', body: fd})
+      .then(() => location.reload());
+  }
+
+  function deleteGroup(groupId) {
+    if (!confirm('Supprimer ce dossier ? Les favoris seront déplacés hors du dossier.')) return;
+    const fd = new FormData();
+    fd.append('group_id', groupId);
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+    fetch('/favorites/groups/delete/', {method: 'POST', body: fd})
+      .then(() => location.reload());
+  }
+
+  function renameGroup(groupId, renameBtn) {
+    const header = renameBtn.closest('.sidebar-group-header');
+    const label = header.querySelector('.group-label');
+    const toggle = header.querySelector('.sidebar-group-toggle');
+    const currentName = label.textContent.trim();
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = currentName;
+    input.className = 'sidebar-rename-input';
+
+    toggle.style.display = 'none';
+    renameBtn.style.display = 'none';
+    header.insertBefore(input, renameBtn);
+    input.focus();
+    input.select();
+
+    function restore() {
+      input.remove();
+      toggle.style.display = '';
+      renameBtn.style.display = '';
+    }
+    function save() {
+      const newName = input.value.trim();
+      if (!newName || newName === currentName) { restore(); return; }
+      const fd = new FormData();
+      fd.append('group_id', groupId);
+      fd.append('name', newName);
+      fd.append('csrfmiddlewaretoken', getCsrfToken());
+      fetch('/favorites/groups/rename/', {method: 'POST', body: fd})
+        .then(() => { label.textContent = newName; restore(); });
+    }
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { input.removeEventListener('blur', save); restore(); }
+    });
+  }
+
+  function toggleGroup(groupId) {
+    const group = document.querySelector(`.sidebar-group[data-group-id="${groupId}"]`);
+    const items = group.querySelector('.sidebar-group-items');
+    const arrow = group.querySelector('.group-arrow');
+    const collapsed = items.style.display === 'none';
+    items.style.display = collapsed ? '' : 'none';
+    arrow.style.transform = collapsed ? '' : 'rotate(-90deg)';
+    const key = 'grp_collapsed_' + groupId;
+    collapsed ? localStorage.removeItem(key) : localStorage.setItem(key, '1');
+  }
+
+  // Restore collapsed state on load
+  document.querySelectorAll('.sidebar-group').forEach(group => {
+    const groupId = group.dataset.groupId;
+    if (localStorage.getItem('grp_collapsed_' + groupId)) {
+      const items = group.querySelector('.sidebar-group-items');
+      const arrow = group.querySelector('.group-arrow');
+      if (items) items.style.display = 'none';
+      if (arrow) arrow.style.transform = 'rotate(-90deg)';
+    }
+  });
+
+  // ── Drag & drop favoris ──────────────────────────────────────────────────
+
+  let _draggedPath = null;
+
+  // ── Drag & drop (mousedown/mousemove/mouseup, car les boutons bloquent le drag HTML5) ──
+  let _dnd = null; // { path, item, ghost, started }
+
+  document.addEventListener('mousedown', e => {
+    const btn = e.target.closest('.sidebar-fav-btn');
+    if (!btn) return;
+    const item = btn.closest('.sidebar-item');
+    if (!item || e.button !== 0) return;
+    e.preventDefault();
+    _dnd = { path: item.dataset.path, item, ghost: null, started: false,
+             startX: e.clientX, startY: e.clientY };
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!_dnd) return;
+    const dist = Math.hypot(e.clientX - _dnd.startX, e.clientY - _dnd.startY);
+    if (!_dnd.started && dist > 6) {
+      _dnd.started = true;
+      _dnd.item.classList.add('dragging');
+      const ghost = document.createElement('div');
+      ghost.className = 'drag-ghost';
+      ghost.textContent = _dnd.item.querySelector('.fav-label').textContent;
+      document.body.appendChild(ghost);
+      _dnd.ghost = ghost;
+    }
+    if (_dnd.started) {
+      _dnd.ghost.style.left = (e.clientX + 14) + 'px';
+      _dnd.ghost.style.top  = (e.clientY + 6)  + 'px';
+      document.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('drop-zone-active'));
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const zone = el && el.closest('.drop-zone');
+      if (zone) zone.classList.add('drop-zone-active');
+    }
+  });
+
+  document.addEventListener('mouseup', e => {
+    if (!_dnd) return;
+    const wasDrag = _dnd.started;
+    if (_dnd.ghost) { _dnd.ghost.style.display = 'none'; }
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const zone = el && el.closest('.drop-zone');
+    if (_dnd.ghost) _dnd.ghost.remove();
+    _dnd.item.classList.remove('dragging');
+    document.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('drop-zone-active'));
+    const path = _dnd.path;
+    _dnd = null;
+
+    if (wasDrag && zone) {
+      // Empêcher le click qui suit le mouseup de changer le dossier
+      document.addEventListener('click', function swallow(ce) {
+        ce.stopImmediatePropagation(); ce.preventDefault();
+        document.removeEventListener('click', swallow, true);
+      }, true);
+      const groupId = zone.dataset.dropGroup;
+      const fd = new FormData();
+      fd.append('path', path);
+      fd.append('group_id', groupId);
+      fd.append('csrfmiddlewaretoken', getCsrfToken());
+      fetch('/favorites/move/', {method: 'POST', body: fd})
+        .then(() => location.reload())
+        .catch(err => console.error('[DnD] fetch error:', err));
+    }
+  });
 </script>
 {% endblock %}

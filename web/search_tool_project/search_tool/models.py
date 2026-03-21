@@ -2,10 +2,24 @@ from django.contrib.auth.models import User
 from django.db import models
 
 
+class FavoriteGroup(models.Model):
+    """A named group (folder) for organizing favorites, per user."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="favorite_groups")
+    name = models.CharField(max_length=200)
+
+    class Meta:
+        ordering = ["name"]
+        unique_together = ("user", "name")
+
+
 class Favorite(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="favorites")
     path = models.TextField()
     name = models.CharField(max_length=255)
+    group = models.ForeignKey(
+        FavoriteGroup, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="favorites"
+    )
 
     class Meta:
         unique_together = ("user", "path")
