@@ -33,6 +33,11 @@ A tool for searching terms across Word (.docx) and PDF files. Available as a des
 - DOCX → PDF conversion via LibreOffice at indexing time
 - PDF served inline with highlighted search terms
 - Indexing status persisted in database (survives server restarts)
+- Robust background indexing: stale job detection, automatic recovery after unexpected shutdown
+- Favorites organized into named groups (create, rename, delete, drag & drop between groups)
+- **Superuser tools:**
+  - Configure allowed root directories for the file browser (users cannot navigate outside these paths)
+  - Orphaned data cleanup: remove `.data/folders/` directories no longer referenced by any favorite
 
 ## Requirements
 

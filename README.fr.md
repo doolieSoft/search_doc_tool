@@ -31,6 +31,11 @@ Outil de recherche de termes dans des fichiers Word (.docx) et PDF. Disponible e
 - Conversion DOCX → PDF via LibreOffice à l'indexation
 - PDF affiché en ligne avec les termes trouvés surlignés
 - Statut d'indexation persisté en base de données (survit aux redémarrages serveur)
+- Indexation robuste : détection de job bloqué, reprise automatique après arrêt inattendu
+- Favoris organisables en dossiers (créer, renommer, supprimer, glisser-déposer entre dossiers)
+- **Outils superutilisateur :**
+  - Configuration des dossiers autorisés pour le navigateur de fichiers (les utilisateurs ne peuvent pas naviguer en dehors de ces chemins)
+  - Nettoyage des données orphelines : suppression des répertoires `.data/folders/` non référencés par aucun favori
 
 ## Prérequis
 
