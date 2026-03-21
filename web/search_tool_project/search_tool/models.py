@@ -26,6 +26,16 @@ class Favorite(models.Model):
         ordering = ["name"]
 
 
+class BrowseRoot(models.Model):
+    """Allowed root directories for the file browser, configured by superusers."""
+    label = models.CharField(max_length=200)
+    path = models.CharField(max_length=500, unique=True)
+
+    class Meta:
+        ordering = ["label"]
+        verbose_name = "Dossier autorisé"
+
+
 class IndexingStatus(models.Model):
     """Singleton (pk=1) — persists indexing state across server restarts."""
     folder = models.TextField(default="")
@@ -38,6 +48,7 @@ class IndexingStatus(models.Model):
     error = models.TextField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+    last_ping = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         verbose_name = "Statut indexation"

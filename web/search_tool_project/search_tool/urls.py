@@ -18,4 +18,9 @@ urlpatterns = [
     path("favorites/groups/create/", views.create_group, name="create_group"),
     path("favorites/groups/delete/", views.delete_group, name="delete_group"),
     path("favorites/groups/rename/", views.rename_group, name="rename_group"),
+    path("admin/cleanup/preview/", views.cleanup_preview, name="cleanup_preview"),
+    path("admin/cleanup/execute/", views.cleanup_execute, name="cleanup_execute"),
+    path("admin/browse-roots/", views.get_browse_roots, name="get_browse_roots"),
+    path("admin/browse-roots/add/", views.add_browse_root, name="add_browse_root"),
+    path("admin/browse-roots/remove/", views.remove_browse_root, name="remove_browse_root"),
 ]

@@ -7,9 +7,19 @@
   <aside class="sidebar">
     <div class="sidebar-header">
       <span class="sidebar-title"><i class="fa-solid fa-star"></i> Favoris</span>
-      <button type="button" class="btn-new-group" onclick="createGroup()" title="Nouveau dossier">
-        <i class="fa-solid fa-folder-plus"></i>
-      </button>
+      <div style="display:flex;gap:4px">
+        <button type="button" class="btn-new-group" onclick="createGroup()" title="Nouveau dossier">
+          <i class="fa-solid fa-folder-plus"></i>
+        </button>
+        {% if request.user.is_superuser %}
+        <button type="button" class="btn-new-group" onclick="openBrowseRoots()" title="Dossiers autorisés pour le navigateur">
+          <i class="fa-solid fa-gear"></i>
+        </button>
+        <button type="button" class="btn-new-group" onclick="openCleanup()" title="Nettoyage des données orphelines">
+          <i class="fa-solid fa-broom"></i>
+        </button>
+        {% endif %}
+      </div>
     </div>
 
     <!-- Favoris sans dossier -->
@@ -209,6 +219,56 @@
     </div>
   </div>
 </div>
+
+<!-- Browse roots modal (superuser) -->
+{% if request.user.is_superuser %}
+<div id="browse-roots-modal" class="modal-overlay" style="display:none"
+     onclick="if(event.target===this)closeBrowseRoots()">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-path"><i class="fa-solid fa-gear"></i> Dossiers autorisés (navigateur)</span>
+      <button class="btn-close" onclick="closeBrowseRoots()">✕</button>
+    </div>
+    <div id="browse-roots-body" style="padding:12px 16px;font-size:13px;min-height:60px">
+      <span style="color:var(--muted)">Chargement…</span>
+    </div>
+    <div class="modal-footer" style="flex-direction:column;gap:8px;align-items:stretch">
+      <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:6px;align-items:center">
+        <input id="new-root-label" type="text" class="folder-input" placeholder="Libellé" style="font-size:13px">
+        <input id="new-root-path" type="text" class="folder-input" placeholder="Ex: I:\Projets\RH" style="font-size:13px">
+        <button class="btn-search" onclick="addBrowseRoot()" style="white-space:nowrap">
+          <i class="fa-solid fa-plus"></i> Ajouter
+        </button>
+      </div>
+      <div id="new-root-error" style="color:var(--red);font-size:12px;display:none"></div>
+      <button class="btn-secondary" onclick="closeBrowseRoots()">Fermer</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Cleanup modal (superuser) -->
+{% if request.user.is_superuser %}
+<div id="cleanup-modal" class="modal-overlay" style="display:none"
+     onclick="if(event.target===this)closeCleanup()">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-path"><i class="fa-solid fa-broom"></i> Nettoyage des données orphelines</span>
+      <button class="btn-close" onclick="closeCleanup()">✕</button>
+    </div>
+    <div id="cleanup-body" style="padding:12px 16px;font-size:13px">
+      <span style="color:var(--muted)">Chargement…</span>
+    </div>
+    <div class="modal-footer" style="gap:8px">
+      <button class="btn-search" id="btn-cleanup-delete" style="display:none"
+              onclick="executeCleanup()">
+        <i class="fa-solid fa-trash"></i> Supprimer les dossiers orphelins
+      </button>
+      <button class="btn-secondary" onclick="closeCleanup()">Fermer</button>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 <!-- Directory browser modal -->
 <div id="browser-modal" class="modal-overlay" style="display:none"
@@ -523,6 +583,115 @@
   // ── Drag & drop favoris ──────────────────────────────────────────────────
 
   let _draggedPath = null;
+
+  // ── Dossiers autorisés (superuser) ──────────────────────────────────────
+  function openBrowseRoots() {
+    document.getElementById('browse-roots-modal').style.display = 'flex';
+    loadBrowseRoots();
+  }
+  function closeBrowseRoots() {
+    document.getElementById('browse-roots-modal').style.display = 'none';
+  }
+  function loadBrowseRoots() {
+    const body = document.getElementById('browse-roots-body');
+    body.innerHTML = '<span style="color:var(--muted)">Chargement…</span>';
+    fetch('/admin/browse-roots/')
+      .then(r => r.json())
+      .then(data => {
+        if (!data.roots.length) {
+          body.innerHTML = '<p style="color:var(--muted);margin:0">Aucun dossier configuré.<br>Sans configuration, les superutilisateurs voient les lecteurs du serveur ; les autres utilisateurs ne peuvent pas naviguer.</p>';
+          return;
+        }
+        let html = '<ul style="margin:0;padding:0;list-style:none">';
+        data.roots.forEach(r => {
+          html += `<li style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);gap:8px">
+            <div>
+              <span style="font-weight:600">${r.label}</span>
+              <span style="display:block;font-size:11px;color:var(--muted);font-family:monospace">${r.path}</span>
+            </div>
+            <button class="sidebar-fav-remove" onclick="removeBrowseRoot(${r.id})" title="Supprimer">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </li>`;
+        });
+        html += '</ul>';
+        body.innerHTML = html;
+      });
+  }
+  function addBrowseRoot() {
+    const label = document.getElementById('new-root-label').value.trim();
+    const path = document.getElementById('new-root-path').value.trim();
+    const errEl = document.getElementById('new-root-error');
+    errEl.style.display = 'none';
+    if (!label || !path) { errEl.textContent = 'Libellé et chemin requis.'; errEl.style.display = ''; return; }
+    const fd = new FormData();
+    fd.append('label', label);
+    fd.append('path', path);
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+    fetch('/admin/browse-roots/add/', {method: 'POST', body: fd})
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) { errEl.textContent = data.error; errEl.style.display = ''; return; }
+        document.getElementById('new-root-label').value = '';
+        document.getElementById('new-root-path').value = '';
+        loadBrowseRoots();
+      });
+  }
+  function removeBrowseRoot(id) {
+    if (!confirm('Retirer ce dossier de la liste des dossiers autorisés ?')) return;
+    const fd = new FormData();
+    fd.append('id', id);
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+    fetch('/admin/browse-roots/remove/', {method: 'POST', body: fd})
+      .then(() => loadBrowseRoots());
+  }
+
+  // ── Nettoyage (superuser) ────────────────────────────────────────────────
+  function openCleanup() {
+    document.getElementById('cleanup-modal').style.display = 'flex';
+    const body = document.getElementById('cleanup-body');
+    const btn = document.getElementById('btn-cleanup-delete');
+    body.innerHTML = '<span style="color:var(--muted)">Chargement…</span>';
+    btn.style.display = 'none';
+    fetch('/admin/cleanup/preview/')
+      .then(r => r.json())
+      .then(data => {
+        if (!data.orphaned.length) {
+          body.innerHTML = '<span style="color:var(--green)"><i class="fa-solid fa-check"></i> Aucun dossier orphelin — rien à nettoyer.</span>';
+          return;
+        }
+        let html = '<p style="margin:0 0 10px;color:var(--muted)">Ces dossiers ne sont plus référencés dans les favoris d\'aucun utilisateur :</p><ul style="margin:0;padding:0;list-style:none">';
+        data.orphaned.forEach(o => {
+          html += `<li style="padding:4px 0;display:flex;justify-content:space-between;gap:16px">
+            <span style="font-family:monospace;font-size:12px">${o.name}</span>
+            <span style="color:var(--muted);flex-shrink:0">${o.size_human}</span>
+          </li>`;
+        });
+        html += '</ul>';
+        body.innerHTML = html;
+        btn.style.display = '';
+      })
+      .catch(() => { body.innerHTML = '<span style="color:var(--red)">Erreur lors du chargement.</span>'; });
+  }
+
+  function closeCleanup() {
+    document.getElementById('cleanup-modal').style.display = 'none';
+  }
+
+  function executeCleanup() {
+    if (!confirm('Supprimer définitivement ces dossiers et leurs données (index, PDFs convertis) ?')) return;
+    const btn = document.getElementById('btn-cleanup-delete');
+    btn.disabled = true;
+    const fd = new FormData();
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+    fetch('/admin/cleanup/execute/', {method: 'POST', body: fd})
+      .then(r => r.json())
+      .then(data => {
+        const body = document.getElementById('cleanup-body');
+        body.innerHTML = `<span style="color:var(--green)"><i class="fa-solid fa-check"></i> ${data.count} dossier(s) supprimé(s).</span>`;
+        btn.style.display = 'none';
+      });
+  }
 
   // ── Drag & drop (mousedown/mousemove/mouseup, car les boutons bloquent le drag HTML5) ──
   let _dnd = null; // { path, item, ghost, started }

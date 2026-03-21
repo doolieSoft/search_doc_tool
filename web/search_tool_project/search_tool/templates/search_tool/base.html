@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Search Doc Tool</title>
   <link rel="icon" type="image/svg+xml" href="{% static 'search_tool/favicon.svg' %}">
-  <link rel="stylesheet" href="{% static 'search_tool/style.css' %}?v=17">
+  <link rel="stylesheet" href="{% static 'search_tool/style.css' %}?v=18">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
   <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
 </head>
@@ -94,17 +94,35 @@
         .then(r => r.json())
         .then(data => {
           const pathEl = document.getElementById('browser-path');
-          pathEl.textContent = data.drives ? 'Lecteurs' : data.path;
-          pathEl.dataset.path = data.path;
           const list = document.getElementById('browser-list');
+          if (data.error) {
+            pathEl.textContent = '';
+            pathEl.dataset.path = '';
+            list.innerHTML = '<li style="color:var(--red);padding:8px 0">' + data.error + '</li>';
+            return;
+          }
+          if (data.mode === 'roots') pathEl.textContent = 'Dossiers autorisés';
+          else if (data.mode === 'drives') pathEl.textContent = 'Lecteurs';
+          else pathEl.textContent = data.path;
+          pathEl.dataset.path = data.path;
           list.innerHTML = '';
           data.entries.forEach(e => {
             const li = document.createElement('li');
-            li.textContent = e.name;
+            if (e.sub) {
+              const nameSpan = document.createElement('span');
+              nameSpan.style.fontWeight = '600';
+              nameSpan.textContent = e.name;
+              const subSpan = document.createElement('span');
+              subSpan.style.cssText = 'display:block;font-size:11px;color:var(--muted);font-family:monospace';
+              subSpan.textContent = e.sub;
+              li.appendChild(nameSpan);
+              li.appendChild(subSpan);
+            } else {
+              li.textContent = e.name;
+              if (data.mode === 'drives') li.style.fontWeight = '600';
+            }
             li.dataset.path = e.path;
-            li.dataset.isDrive = data.drives ? 'true' : 'false';
             li.onclick = () => loadDir(e.path);
-            if (data.drives) li.style.fontWeight = '600';
             list.appendChild(li);
           });
         });

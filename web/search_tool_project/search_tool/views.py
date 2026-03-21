@@ -3,8 +3,11 @@ import hashlib
 import io
 import os
 import re
+import shutil
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import timedelta
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -14,7 +17,7 @@ from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_GET, require_POST
 
-from .models import Favorite, FavoriteGroup, IndexingStatus
+from .models import BrowseRoot, Favorite, FavoriteGroup, IndexingStatus
 from .services.config import load_config, save_config
 from .services.converter import get_pdf_cache_path
 from .services.index import fts_search, get_db, index_file, is_indexed
@@ -30,8 +33,35 @@ def _persist_status(**kwargs):
         pass  # never crash the indexing thread over a DB write
 
 
+def _ping_db(stop_event: threading.Event, interval: int = 5) -> None:
+    """Keep last_ping fresh while indexing. Runs in a daemon thread."""
+    from django.utils import timezone
+    while not stop_event.wait(interval):
+        try:
+            IndexingStatus.objects.filter(pk=1).update(last_ping=timezone.now())
+        except Exception:
+            pass
+
+
+_STALE_SECONDS = 30  # job with last_ping older than this is considered dead
+
+
+def _is_stale() -> bool:
+    """Return True if the DB shows running=True but last_ping is too old."""
+    try:
+        from django.utils import timezone
+        status = IndexingStatus.objects.filter(pk=1).first()
+        if not status or not status.running:
+            return True
+        if status.last_ping is None:
+            return True
+        return (timezone.now() - status.last_ping).total_seconds() > _STALE_SECONDS
+    except Exception:
+        return False
+
+
 def _reset_running_on_startup():
-    """Called at module load: if DB says running=True, the thread is dead — fix it."""
+    """Called at module load: any running=True in DB means the thread is dead."""
     try:
         IndexingStatus.objects.filter(pk=1, running=True).update(
             running=False, error="Interrompu (redémarrage serveur)"
@@ -79,138 +109,143 @@ _index_lock = threading.Lock()
 def _run_indexing(folder: str, recurse: bool, db_file: str):
     """
     Two-phase indexing:
-    1. Convert DOCX → PDF sequentially (LibreOffice can't run in parallel safely)
-    2. Extract text + insert into FTS5 in parallel (real multithreading benefit)
+    1. Convert DOCX → PDF (Word COM if available, else LibreOffice)
+    2. Extract text + insert into FTS5 in parallel
+
+    A ping thread keeps last_ping fresh every 5 s so stale detection works.
+    A try/finally guarantees running=False even on unexpected exceptions.
     """
     global _index_state
+    from django.utils import timezone
     from .services.converter import convert_docx_to_pdf
 
-    files = collect_files(folder, recurse)
+    ping_stop = threading.Event()
+    ping_thread = threading.Thread(target=_ping_db, args=(ping_stop,), daemon=True)
+    ping_thread.start()
 
-    conn = get_db(db_file)
-    to_index = [f for f in files if not is_indexed(conn, f)]
-    conn.close()
+    try:
+        files = collect_files(folder, recurse)
+        conn = get_db(db_file)
+        to_index = [f for f in files if not is_indexed(conn, f)]
+        conn.close()
 
-    docx_to_convert = [p for p in to_index if p.lower().endswith(".docx")]
-    pdf_direct = [p for p in to_index if not p.lower().endswith(".docx")]
+        docx_to_convert = [p for p in to_index if p.lower().endswith(".docx")]
+        pdf_direct = [p for p in to_index if not p.lower().endswith(".docx")]
+        total = len(to_index)
 
-    # Total = number of files to index (each file counted once).
-    total = len(to_index)
+        with _index_lock:
+            _index_state.update({
+                "total": total, "done": 0, "newly_indexed": 0, "failed": 0,
+                "current": "", "phase": "converting" if docx_to_convert else "indexing",
+                "conv_done": 0, "conv_total": len(docx_to_convert),
+            })
+        _persist_status(folder=folder, running=True, total=total, done=0,
+                        newly_indexed=0, failed=0, current="", error=None,
+                        started_at=timezone.now(), finished_at=None)
 
-    from django.utils import timezone
-    with _index_lock:
-        _index_state.update({
-            "total": total, "done": 0, "newly_indexed": 0, "failed": 0,
-            "current": "", "phase": "converting" if docx_to_convert else "indexing",
-            "conv_done": 0, "conv_total": len(docx_to_convert),
-        })
-    _persist_status(folder=folder, running=True, total=total, done=0,
-                    newly_indexed=0, failed=0, current="", error=None,
-                    started_at=timezone.now(), finished_at=None)
+        if not to_index:
+            return  # finally handles cleanup
 
-    if not to_index:
+        # ── Phase 1 : DOCX → PDF ─────────────────────────────────────────────
+        pdf_ready = []
+
+        if docx_to_convert:
+            from .services.converter import is_word_available, WordConverter
+            folder_paths = _get_folder_paths(folder)
+            pdf_cache = folder_paths["pdf_cache"]
+            docx_copy = folder_paths["docx_copy"]
+
+            if is_word_available():
+                with WordConverter() as wc:
+                    for path in docx_to_convert:
+                        if not _index_state["running"]:
+                            return
+                        wc.convert(path, pdf_cache, docx_copy)
+                        with _index_lock:
+                            _index_state["conv_done"] += 1
+                            _index_state["current"] = os.path.basename(path)
+                        pdf_ready.append(path)
+            else:
+                lo_workers = min(2, len(docx_to_convert))
+
+                def _convert(path):
+                    return path, convert_docx_to_pdf(path, pdf_cache, docx_copy)
+
+                with ThreadPoolExecutor(max_workers=lo_workers) as executor:
+                    futures = {executor.submit(_convert, p): p for p in docx_to_convert}
+                    for future in as_completed(futures):
+                        if not _index_state["running"]:
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            return
+                        path = futures[future]
+                        try:
+                            future.result()
+                        except RuntimeError as e:
+                            with _index_lock:
+                                _index_state["error"] = str(e)
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            return  # finally handles cleanup
+                        except Exception:
+                            pass
+                        with _index_lock:
+                            _index_state["conv_done"] += 1
+                            _index_state["current"] = os.path.basename(path)
+                        pdf_ready.append(path)
+
+        pdf_ready.extend(pdf_direct)
+
+        with _index_lock:
+            _index_state["phase"] = "indexing"
+
+        # ── Phase 2 : FTS5 indexing ───────────────────────────────────────────
+        workers = min(8, os.cpu_count() or 4, max(1, len(pdf_ready)))
+
+        def index_one(path):
+            from .services.index import index_file as _index_file
+            return _index_file(path, db_file, _get_folder_paths(folder)["pdf_cache"])
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(index_one, p): p for p in pdf_ready}
+            for future in as_completed(futures):
+                if not _index_state["running"]:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+                path = futures[future]
+                try:
+                    success = future.result()
+                except Exception:
+                    success = False
+                with _index_lock:
+                    _index_state["done"] += 1
+                    _index_state["current"] = os.path.basename(path)
+                    if success:
+                        _index_state["newly_indexed"] += 1
+                    else:
+                        _index_state["failed"] += 1
+
+    except Exception as e:
+        with _index_lock:
+            if not _index_state.get("error"):
+                _index_state["error"] = str(e)
+
+    finally:
+        ping_stop.set()
         with _index_lock:
             _index_state["running"] = False
-        _persist_status(running=False, finished_at=timezone.now())
-        return
-
-    # ── Phase 1 : convert DOCX → PDF ─────────────────────────────────────────
-    pdf_ready = []  # paths ready to index (original PDFs + successfully converted)
-
-    if docx_to_convert:
-        from .services.converter import is_word_available, WordConverter
-
-        folder_paths = _get_folder_paths(folder)
-        pdf_cache = folder_paths["pdf_cache"]
-        docx_copy = folder_paths["docx_copy"]
-
-        if is_word_available():
-            # ── Word COM : séquentiel avec instance unique (plus rapide) ──────
-            with WordConverter() as wc:
-                for path in docx_to_convert:
-                    if not _index_state["running"]:
-                        return
-                    wc.convert(path, pdf_cache, docx_copy)
-                    with _index_lock:
-                        _index_state["conv_done"] += 1
-                        _index_state["current"] = os.path.basename(path)
-                    # Always queue for phase 2: index_file will use cached PDF or
-                    # fall back to LibreOffice if Word COM failed on this file.
-                    pdf_ready.append(path)
-        else:
-            # ── LibreOffice : parallèle avec profils isolés ───────────────────
-            lo_workers = min(2, len(docx_to_convert))
-
-            def _convert(path):
-                return path, convert_docx_to_pdf(path, pdf_cache, docx_copy)
-
-            with ThreadPoolExecutor(max_workers=lo_workers) as executor:
-                futures = {executor.submit(_convert, p): p for p in docx_to_convert}
-                for future in as_completed(futures):
-                    if not _index_state["running"]:
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        return
-                    path = futures[future]
-                    try:
-                        future.result()
-                    except RuntimeError as e:
-                        with _index_lock:
-                            _index_state["error"] = str(e)
-                            _index_state["running"] = False
-                        _persist_status(running=False, error=str(e), finished_at=timezone.now())
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        return
-                    except Exception:
-                        pass
-                    with _index_lock:
-                        _index_state["conv_done"] += 1
-                        _index_state["current"] = os.path.basename(path)
-                    # Always queue for phase 2 (same reason as above)
-                    pdf_ready.append(path)
-
-    pdf_ready.extend(pdf_direct)
-
-    with _index_lock:
-        _index_state["phase"] = "indexing"
-
-    # ── Phase 2 : extract text + FTS5 insert in parallel ─────────────────────
-    workers = min(8, os.cpu_count() or 4, max(1, len(pdf_ready)))
-
-    def index_one(path):
-        from .services.index import index_file as _index_file
-        return _index_file(path, db_file, _get_folder_paths(folder)["pdf_cache"])
-
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(index_one, p): p for p in pdf_ready}
-        for future in as_completed(futures):
-            if not _index_state["running"]:
-                executor.shutdown(wait=False, cancel_futures=True)
-                break
-            path = futures[future]
-            try:
-                success = future.result()
-            except Exception:
-                success = False
-            with _index_lock:
-                _index_state["done"] += 1
-                _index_state["current"] = os.path.basename(path)
-                if success:
-                    _index_state["newly_indexed"] += 1
-                else:
-                    _index_state["failed"] += 1
-
-    with _index_lock:
-        _index_state["running"] = False
-    # Invalider le cache summary pour ce dossier
-    _summary_cache.clear()
-    _persist_status(
-        running=False,
-        done=_index_state["done"],
-        newly_indexed=_index_state["newly_indexed"],
-        failed=_index_state["failed"],
-        current=_index_state["current"],
-        finished_at=timezone.now(),
-    )
+        _summary_cache.clear()
+        try:
+            from django.utils import timezone
+            _persist_status(
+                running=False,
+                done=_index_state["done"],
+                newly_indexed=_index_state["newly_indexed"],
+                failed=_index_state["failed"],
+                current=_index_state.get("current", ""),
+                error=_index_state.get("error"),
+                finished_at=timezone.now(),
+            )
+        except Exception:
+            pass
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -369,7 +404,11 @@ def start_index(request):
 
     with _index_lock:
         if _index_state["running"]:
-            return JsonResponse({"error": "Indexation déjà en cours."}, status=409)
+            if _is_stale():
+                # Thread mort sans cleanup — on réinitialise
+                _index_state["running"] = False
+            else:
+                return JsonResponse({"error": "Indexation déjà en cours."}, status=409)
         _index_state = {
             "running": True,
             "phase": "",
@@ -497,30 +536,71 @@ def _list_drives():
     return [f"{d}:\\" for d in string.ascii_uppercase if os.path.exists(f"{d}:\\")]
 
 
+def _is_under_root(path: str, root: str) -> bool:
+    """Return True if path is equal to or inside root (case-insensitive)."""
+    p = os.path.normcase(os.path.normpath(path))
+    r = os.path.normcase(os.path.normpath(root))
+    return p == r or p.startswith(r + os.sep)
+
+
 @login_required
 @require_GET
 def browse_dir(request):
+    roots = list(BrowseRoot.objects.order_by("label"))
     path = request.GET.get("path", "").strip()
 
-    # Empty path → show drive list
+    # ── No roots configured → legacy behaviour ────────────────────────────────
+    if not roots:
+        if not request.user.is_superuser:
+            return JsonResponse(
+                {"error": "Aucun dossier autorisé configuré. Contactez l'administrateur."},
+                status=503,
+            )
+        if not path:
+            drives = _list_drives()
+            entries = [{"name": d.rstrip("\\"), "path": d} for d in drives]
+            return JsonResponse({"path": "", "entries": entries, "mode": "drives"})
+        path = os.path.normpath(path)
+        if not os.path.isdir(path):
+            drives = _list_drives()
+            entries = [{"name": d.rstrip("\\"), "path": d} for d in drives]
+            return JsonResponse({"path": "", "entries": entries, "mode": "drives"})
+        entries = []
+        parent = os.path.dirname(path)
+        if parent == path:
+            entries.append({"name": "← Lecteurs", "path": ""})
+        else:
+            entries.append({"name": "..", "path": parent})
+        try:
+            for name in sorted(os.listdir(path)):
+                full = os.path.join(path, name)
+                if os.path.isdir(full) and not name.startswith("."):
+                    entries.append({"name": name, "path": full})
+        except PermissionError:
+            pass
+        return JsonResponse({"path": path, "entries": entries, "mode": "dir"})
+
+    # ── Roots configured ──────────────────────────────────────────────────────
     if not path:
-        drives = _list_drives()
-        entries = [{"name": d.rstrip("\\"), "path": d} for d in drives]
-        return JsonResponse({"path": "", "entries": entries, "drives": True})
+        entries = [{"name": r.label, "path": r.path, "sub": r.path} for r in roots]
+        return JsonResponse({"path": "", "entries": entries, "mode": "roots"})
 
     path = os.path.normpath(path)
+
+    # Security: path must be under one of the configured roots
+    matched_root = next((r for r in roots if _is_under_root(path, r.path)), None)
+    if not matched_root:
+        return JsonResponse({"error": "Accès refusé"}, status=403)
+
     if not os.path.isdir(path):
-        drives = _list_drives()
-        entries = [{"name": d.rstrip("\\"), "path": d} for d in drives]
-        return JsonResponse({"path": "", "entries": entries, "drives": True})
+        path = os.path.normpath(matched_root.path)
 
     entries = []
-    parent = os.path.dirname(path)
-    # At drive root (e.g. C:\), parent == path → go back to drive list
-    if parent == path:
-        entries.append({"name": "← Lecteurs", "path": ""})
+    if _is_under_root(path, matched_root.path) and \
+            os.path.normcase(os.path.normpath(path)) == os.path.normcase(os.path.normpath(matched_root.path)):
+        entries.append({"name": "← Dossiers autorisés", "path": ""})
     else:
-        entries.append({"name": "..", "path": parent})
+        entries.append({"name": "..", "path": os.path.dirname(path)})
 
     try:
         for name in sorted(os.listdir(path)):
@@ -530,7 +610,44 @@ def browse_dir(request):
     except PermissionError:
         pass
 
-    return JsonResponse({"path": path, "entries": entries, "drives": False})
+    return JsonResponse({"path": path, "entries": entries, "mode": "dir"})
+
+
+@login_required
+@require_GET
+def get_browse_roots(request):
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Réservé aux superutilisateurs"}, status=403)
+    roots = list(BrowseRoot.objects.order_by("label").values("id", "label", "path"))
+    return JsonResponse({"roots": roots})
+
+
+@login_required
+@require_POST
+def add_browse_root(request):
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Réservé aux superutilisateurs"}, status=403)
+    path = request.POST.get("path", "").strip()
+    label = request.POST.get("label", "").strip()
+    if not path or not label:
+        return JsonResponse({"error": "Libellé et chemin requis."}, status=400)
+    path = os.path.normpath(path)
+    if not os.path.isdir(path):
+        return JsonResponse({"error": "Ce chemin n'existe pas ou n'est pas un dossier."}, status=400)
+    if BrowseRoot.objects.filter(path=path).exists():
+        return JsonResponse({"error": "Ce chemin est déjà dans la liste."}, status=400)
+    root = BrowseRoot.objects.create(path=path, label=label)
+    return JsonResponse({"ok": True, "id": root.id, "label": root.label, "path": root.path})
+
+
+@login_required
+@require_POST
+def remove_browse_root(request):
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Réservé aux superutilisateurs"}, status=403)
+    root_id = request.POST.get("id", "")
+    BrowseRoot.objects.filter(pk=root_id).delete()
+    return JsonResponse({"ok": True})
 
 
 @login_required
@@ -606,3 +723,67 @@ def move_favorite(request):
     else:
         Favorite.objects.filter(user=request.user, path=path).update(group=None)
     return JsonResponse({"ok": True})
+
+
+# ── Cleanup (superuser only) ──────────────────────────────────────────────────
+
+def _referenced_hashes() -> set[str]:
+    """Hashes of all folder paths referenced by any user's favorites."""
+    hashes = set()
+    for path in Favorite.objects.values_list("path", flat=True).distinct():
+        normalized = os.path.normpath(path).lower()
+        hashes.add(hashlib.md5(normalized.encode("utf-8")).hexdigest()[:10])
+    return hashes
+
+
+def _folder_size(path: Path) -> int:
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
+def _human_size(n: int) -> str:
+    for unit in ("o", "Ko", "Mo", "Go"):
+        if n < 1024:
+            return f"{n:.0f} {unit}"
+        n /= 1024
+    return f"{n:.1f} To"
+
+
+def _orphaned_dirs() -> list[dict]:
+    folders_dir = Path(settings.DATA_DIR) / "folders"
+    if not folders_dir.exists():
+        return []
+    referenced = _referenced_hashes()
+    result = []
+    for d in sorted(folders_dir.iterdir()):
+        if not d.is_dir():
+            continue
+        parts = d.name.rsplit("_", 1)
+        if len(parts) != 2 or not re.match(r"^[0-9a-f]{10}$", parts[1]):
+            continue
+        if parts[1] not in referenced:
+            size = _folder_size(d)
+            result.append({"name": d.name, "path": str(d), "size_human": _human_size(size)})
+    return result
+
+
+@login_required
+@require_GET
+def cleanup_preview(request):
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Accès refusé"}, status=403)
+    return JsonResponse({"orphaned": _orphaned_dirs()})
+
+
+@login_required
+@require_POST
+def cleanup_execute(request):
+    if not request.user.is_superuser:
+        return JsonResponse({"error": "Accès refusé"}, status=403)
+    deleted = []
+    for item in _orphaned_dirs():
+        try:
+            shutil.rmtree(item["path"])
+            deleted.append(item["name"])
+        except Exception as e:
+            pass
+    return JsonResponse({"deleted": deleted, "count": len(deleted)})
