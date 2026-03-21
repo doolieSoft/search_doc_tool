@@ -2,52 +2,72 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Running the Application
+## Repository structure
+
+```
+desktop/          PyQt6 desktop application (python -m search_tool)
+web/              Django web application
+  search_tool_project/
+    manage.py
+    project/      Django settings (DJANGO_SETTINGS_MODULE=project.settings)
+    search_tool/  Django app (views, services, templates, static)
+```
+
+## Desktop app
 
 ```bash
-# Activate virtual environment (Windows)
+cd desktop
+python -m venv venv
 venv\Scripts\activate
-
-# Run the primary PyQt6 application
-python search_tool_qt.py
-
-# Run the alternative Tkinter application
-python search_tool_tkinter.py
+pip install -r requirements.txt
+python -m search_tool
 ```
 
-**Python version:** 3.12.10 (see `.python-version`)
+### Architecture (desktop)
 
-**Dependencies** (install into venv if missing):
+Package `desktop/search_tool/`:
+- `core/config.py` — `remove_accents`, config/favorites persistence (`~/.search_tool_config.json`)
+- `core/extractor.py` — `extract_text_docx` (python-docx), `extract_text_pdf` (pymupdf)
+- `core/search.py` — `parse_query`, `build_pattern`, `search_file`, `collect_files`
+- `core/index.py` — SQLite FTS5 index, `get_db`, `index_file`, `fts_search`
+- `ui/workers.py` — `IndexWorker`, `SearchWorker` (QThread + ThreadPoolExecutor)
+- `ui/app.py` — `SearchApp(QMainWindow)`
+
+## Web app (Django)
+
 ```bash
-pip install PyQt6 python-docx pymupdf
+cd web
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+cd search_tool_project
+python manage.py runserver
 ```
 
-## Architecture
+Requires LibreOffice installed on the system (DOCX → PDF conversion).
 
-This is a single-file desktop application for searching terms across `.docx` and `.pdf` files. There are two independent UI implementations:
-- **[search_tool_qt.py](search_tool_qt.py)** — Primary implementation, PyQt6 with dark mode
-- **[search_tool_tkinter.py](search_tool_tkinter.py)** — Alternative Tkinter implementation
+### Architecture (web)
 
-### Data flow
+`web/search_tool_project/search_tool/services/`:
+- `config.py` — same `remove_accents`, config/favorites (shared with desktop via `~/.search_tool_config.json`)
+- `extractor.py` — PDF-only via pymupdf (no python-docx)
+- `converter.py` — `convert_docx_to_pdf` via LibreOffice headless, content-addressed cache in `.data/pdf_cache/`
+- `index.py` — FTS5 per-page schema (`file UNINDEXED, page UNINDEXED, content`), stored in `.data/search_tool_index.db`
+- `search.py` — same logic as desktop but DOCX files are searched via their cached PDF
 
-1. **File collection** (`collect_files`) — scans a folder recursively for `.docx`/`.pdf`, skipping `~$` temp files
-2. **Text extraction** — `extract_text_docx` (python-docx) or `extract_text_pdf` (pymupdf/fitz), page-aware for PDFs
-3. **Query parsing** (`parse_query`) — spaces = OR mode, `+` = AND mode, `"quoted"` = phrase; returns `(terms, mode)`
-4. **Pattern building** (`build_pattern`) — compiles regex with optional case-sensitivity and whole-word flags
-5. **Search** (`search_file`) — called concurrently via `ThreadPoolExecutor` (8 workers) inside `SearchWorker(QThread)` to keep UI responsive
-6. **Context extraction** (`get_context`, `get_combined_context`) — 100-char windows around matches, merged when within 30 words
-7. **Display** — `ResultsModel(QAbstractTableModel)` + `ContextDelegate` renders HTML-highlighted results (matched terms in orange `#FFB347`)
+Data flow:
+1. Indexing: DOCX → LibreOffice → PDF (cached) → pymupdf → FTS5 per-page rows
+2. Search: FTS5 pre-filter (file candidates) → regex on PDF pages → results with page numbers
+3. Display: results link to `/serve/?path=<b64>#page=N` — browser PDF viewer opens at correct page
 
-### Configuration
+Settings: `project/settings.py` — `DB_FILE`, `PDF_CACHE_DIR` point to `web/search_tool_project/.data/`
 
-Persisted to `~/.search_tool_config.json`:
-- Last used folder path
-- Favorites list (folder paths with optional custom display names)
+Background indexing runs in a daemon thread; `/index/status/` returns JSON polled by JS.
 
 ### Key design notes
 
-- `remove_accents()` normalizes Unicode before matching (accent-insensitive search)
-- AND mode requires all terms present in the same file; OR mode reports per-term matches
-- PDF results include page numbers; DOCX results copy context to clipboard for use with Ctrl+F
-- `SearchWorker` has a `_stop` flag checked between files for cancellation support
-- Opening a result double-clicks: DOCX copies context to clipboard, PDF tries SumatraPDF/Adobe Reader with page argument
+- `remove_accents()` normalizes Unicode before FTS5 and regex matching (accent-insensitive)
+- FTS5 uses `tokenize='trigram'` — minimum 3-character terms
+- AND mode requires all terms present on the same page; OR mode reports per-term matches
+- `get_pdf_path()` transparently returns original path for `.pdf` or cached PDF path for `.docx`
+- Config/favorites in `~/.search_tool_config.json` is shared between desktop and web apps

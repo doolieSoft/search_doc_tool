@@ -1,67 +1,91 @@
 # Search Doc Tool
 
-Outil de recherche de termes dans des fichiers Word (.docx) et PDF, avec une interface graphique moderne en mode sombre.
+Outil de recherche de termes dans des fichiers Word (.docx) et PDF. Disponible en application bureau (PyQt6) et application web (Django).
 
-![Aperçu de l'application](screenshots/search_doc_tool.png)
+### Application web
+
+| Mode sombre | Mode clair |
+|---|---|
+| ![Web mode sombre](screenshots/search_doc_tool_web_dark_mode.png) | ![Web mode clair](screenshots/search_doc_tool_web_light_mode.png) |
 
 ## Fonctionnalités
 
 - Recherche dans des fichiers `.docx` et `.pdf` (récursivement ou non)
 - Syntaxe de requête avancée :
   - Mots séparés par des espaces → mode **OU** (au moins un terme)
-  - Opérateur `+` → mode **ET** (tous les termes présents dans le fichier)
+  - Opérateur `+` → mode **ET** (tous les termes présents)
   - `"phrase exacte"` → recherche de la phrase littérale
 - Recherche insensible aux accents par défaut
 - Options : sensibilité à la casse, correspondance sur mot entier
 - Affichage du contexte autour de chaque occurrence (terme mis en évidence)
-- Numéro de page pour les PDFs
-- Export des résultats en CSV
-- Système de favoris pour les dossiers fréquents
-- Recherche multi-threadée (l'interface reste réactive) — ~500 fichiers / 600 Mo traités en environ 3 minutes
-- Version avec index SQLite FTS5 pour des recherches quasi-instantanées sur les dossiers déjà indexés
+- Numéro de page avec lien direct vers la page dans le visualiseur PDF
+- Barre latérale de favoris pour les dossiers fréquents (par utilisateur, redimensionnable)
+- Index SQLite FTS5 pour des recherches quasi-instantanées sur les dossiers déjà indexés
+- Indexation en arrière-plan avec barre de progression et bouton d'arrêt
+- Bascule thème clair/sombre
+
+## Application web — fonctionnalités supplémentaires
+
+- Multi-utilisateurs : authentification Django (connexion requise)
+- Index partagé par dossier : un index par chemin de dossier, partagé entre tous les utilisateurs
+- Conversion DOCX → PDF via LibreOffice à l'indexation
+- PDF affiché en ligne avec les termes trouvés surlignés
+- Statut d'indexation persisté en base de données (survit aux redémarrages serveur)
 
 ## Prérequis
 
 - Python 3.12+
-- Dépendances :
+- **Application web uniquement :** LibreOffice installé (conversion DOCX → PDF à l'indexation)
+
+## Installation et lancement
+
+### Bureau (PyQt6)
 
 ```bash
-pip install PyQt6 python-docx pymupdf
+cd desktop
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+python -m search_tool
 ```
 
-## Lancement
+### Web (Django) — développement
 
 ```bash
-# Recommandé — package Python (PyQt6 + index SQLite FTS5)
-python -m search_tool
+cd web
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+cd search_tool_project
+python manage.py migrate
+python manage.py createsuperuser
+python manage.py runserver
+```
 
-# Scripts autonomes (ancienne version)
-python search_tool_qt_fts.py       # PyQt6 avec index FTS5
-python search_tool_qt.py           # PyQt6 sans index
-python search_tool_tkinter.py      # Alternative Tkinter
+Puis ouvrir `http://127.0.0.1:8000` dans le navigateur.
+
+### Web (Django) — production (Waitress)
+
+```bash
+cd web/search_tool_project
+python manage.py collectstatic
+DJANGO_DEBUG=false python run.py --host 0.0.0.0 --port 8000
 ```
 
 ## Utilisation
 
-1. Sélectionner un dossier contenant les documents à parcourir
-2. Saisir un ou plusieurs termes dans la barre de recherche
-3. Lancer la recherche — les résultats s'affichent en temps réel
-4. Double-cliquer sur un résultat pour ouvrir le fichier :
-   - **PDF** : ouvre à la page correspondante (SumatraPDF ou Adobe Reader)
-   - **DOCX** : copie le contexte dans le presse-papiers pour un Ctrl+F rapide
+1. Sélectionner un dossier depuis la barre latérale des favoris ou saisir/parcourir un chemin
+2. Cliquer sur **Indexer** pour construire l'index FTS5 (première fois ou après ajout de fichiers)
+3. Saisir un ou plusieurs termes et cliquer sur **Lancer**
+4. Cliquer sur un résultat pour ouvrir le PDF à la bonne page, avec le terme surligné
 
-Les dossiers fréquemment utilisés peuvent être sauvegardés dans les **favoris** (clic droit pour renommer ou supprimer).
+## Index et stockage des données
 
-## Index SQLite FTS5
-
-La version FTS5 maintient un index local pour accélérer les recherches sur les dossiers déjà parcourus.
-
-- Cliquer sur **"Indexer le dossier"** pour indexer le dossier courant — l'indicateur affiche le nombre de fichiers indexés (`✅ Index à jour` ou `⚠ N/M indexés`)
-- Les recherches suivantes utilisent l'index FTS5 pour les fichiers déjà indexés, et la recherche directe pour les autres
-- L'index est **global** (partagé entre tous les dossiers) mais les recherches sont toujours filtrées au dossier sélectionné
-- Les fichiers sans texte extractible (PDFs scannés, fichiers protégés) sont marqués comme traités et ne sont pas retentés
-- L'index est stocké dans `.data/search_tool_index.db` dans le dossier de l'application
+- Index stocké par dossier dans `.data/folders/<nom_dossier>_<hash>/index.db`
+- PDFs convertis mis en cache dans `.data/pdf_cache/`
+- Copies DOCX (contournement lecteur réseau) dans `.data/docx_copy/`
+- Statut d'indexation (heure de début, compteurs, erreurs) persisté dans la base Django
 
 ## Configuration
 
-La configuration est sauvegardée automatiquement dans `~/.search_tool_config.json` (dernier dossier utilisé, favoris).
+Le dernier dossier et le paramètre de récursivité sont sauvegardés automatiquement dans `~/.search_tool_config.json`. Les favoris sont stockés par utilisateur dans la base de données Django.

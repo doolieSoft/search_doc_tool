@@ -2,12 +2,13 @@ import os
 import re
 
 from .config import remove_accents
-from .extractor import HAS_DOCX, HAS_PDF, extract_text_docx, extract_text_pdf
+from .extractor import extract_text_pdf
+from .converter import get_pdf_path
 
 
 def parse_query(raw: str):
-    raw_no_quotes = re.sub(r'"[^"]+"', '', raw)
-    mode = "AND" if '+' in raw_no_quotes else "OR"
+    raw_no_quotes = re.sub(r'"[^"]+"', "", raw)
+    mode = "AND" if "+" in raw_no_quotes else "OR"
     term_list = []
     i = 0
     while i < len(raw):
@@ -20,11 +21,11 @@ def parse_query(raw: str):
                 i = end + 1
             else:
                 i += 1
-        elif raw[i] in ('+', ',', ' '):
+        elif raw[i] in ("+", ",", " "):
             i += 1
         else:
             end = i
-            while end < len(raw) and raw[end] not in ('"', '+', ',', ' '):
+            while end < len(raw) and raw[end] not in ('"', "+", ",", " "):
                 end += 1
             word = raw[i:end].strip()
             if word:
@@ -34,8 +35,7 @@ def parse_query(raw: str):
 
 
 def _word_span(text: str, ts: int, te: int) -> tuple[int, int]:
-    """Étend te jusqu'à la fin du mot (lettres, chiffres, _ et -)."""
-    while te < len(text) and (text[te].isalnum() or text[te] in '_-'):
+    while te < len(text) and (text[te].isalnum() or text[te] in "_-"):
         te += 1
     return ts, te
 
@@ -52,7 +52,7 @@ def get_context(text: str, match, window: int = 100) -> str:
 
 
 def get_combined_context(text: str, matches: list, window: int = 100,
-                          proximity_words: int = 30) -> str:
+                         proximity_words: int = 30) -> str:
     if not matches:
         return ""
     if len(matches) == 1:
@@ -76,34 +76,37 @@ def get_combined_context(text: str, matches: list, window: int = 100,
 
 def build_pattern(term: str, case_sensitive: bool, whole_word: bool):
     norm = remove_accents(term) if not case_sensitive else term
-    words = re.split(r'\s+', norm.strip())
+    words = re.split(r"\s+", norm.strip())
     escaped = [re.escape(w) for w in words]
-    pattern_str = r'[\s\W]*'.join(escaped)
+    pattern_str = r"[\s\W]*".join(escaped)
     if whole_word:
-        pattern_str = r'\b' + pattern_str + r'\b'
+        pattern_str = r"\b" + pattern_str + r"\b"
     flags = 0 if case_sensitive else re.IGNORECASE
     return re.compile(pattern_str, flags)
 
 
 def search_file(path: str, terms: list, case_sensitive: bool,
-                whole_word: bool, mode: str) -> list[dict]:
-    ext = os.path.splitext(path)[1].lower()
+                whole_word: bool, mode: str, pdf_cache_dir: str) -> list[dict]:
+    """
+    Search a file for terms.
+    DOCX files are searched via their cached PDF conversion.
+    Returns list of result dicts with keys: file, term, context, page.
+    """
+    pdf_path = get_pdf_path(path, pdf_cache_dir)
+    if not pdf_path or not os.path.exists(pdf_path):
+        return []
+
     try:
-        if ext == ".docx":
-            if not HAS_DOCX:
-                return []
-            pages = [(None, extract_text_docx(path))]
-        elif ext == ".pdf":
-            if not HAS_PDF:
-                return []
-            pages = extract_text_pdf(path)
-        else:
-            return []
+        pages = extract_text_pdf(pdf_path)
     except Exception as e:
         return [{"file": path, "term": "ERREUR", "context": str(e), "page": None}]
 
+    if not pages:
+        return []
+
+    results = []
+
     if mode == "AND":
-        results = []
         for page_num, raw_text in pages:
             search_text = remove_accents(raw_text) if not case_sensitive else raw_text
             patterns = {}
@@ -122,16 +125,13 @@ def search_file(path: str, terms: list, case_sensitive: bool,
                 page_matches[term] = ms
             if all_found:
                 best = [ms[0] for ms in page_matches.values()]
-                m0 = best[0]
-                s = max(0, m0.start() - 20)
-                e = min(len(raw_text), m0.end() + 20)
-                ctrlf = raw_text[s:e].replace("\n", " ").strip()
-                results.append({"file": path, "term": " + ".join(terms),
-                                 "context": get_combined_context(raw_text, best),
-                                 "ctrlf": ctrlf, "page": page_num})
-        return results
+                results.append({
+                    "file": path,
+                    "term": " + ".join(terms),
+                    "context": get_combined_context(raw_text, best),
+                    "page": page_num,
+                })
     else:
-        results = []
         for page_num, raw_text in pages:
             search_text = remove_accents(raw_text) if not case_sensitive else raw_text
             for term in terms:
@@ -140,13 +140,14 @@ def search_file(path: str, terms: list, case_sensitive: bool,
                 except re.error:
                     continue
                 for match in pat.finditer(search_text):
-                    s = max(0, match.start() - 20)
-                    e = min(len(raw_text), match.end() + 20)
-                    ctrlf = raw_text[s:e].replace("\n", " ").strip()
-                    results.append({"file": path, "term": term,
-                                     "context": get_context(raw_text, match),
-                                     "ctrlf": ctrlf, "page": page_num})
-        return results
+                    results.append({
+                        "file": path,
+                        "term": term,
+                        "context": get_context(raw_text, match),
+                        "page": page_num,
+                    })
+
+    return results
 
 
 def collect_files(folder: str, recurse: bool) -> list:
@@ -155,10 +156,12 @@ def collect_files(folder: str, recurse: bool) -> list:
     if recurse:
         for root, _, filenames in os.walk(folder):
             for f in filenames:
-                if os.path.splitext(f)[1].lower() in exts and not f.startswith(("~$", "._", ".~")):
+                if (os.path.splitext(f)[1].lower() in exts
+                        and not f.startswith(("~$", "._", ".~"))):
                     files.append(os.path.join(root, f))
     else:
         for f in os.listdir(folder):
-            if os.path.splitext(f)[1].lower() in exts and not f.startswith(("~$", "._", ".~")):
+            if (os.path.splitext(f)[1].lower() in exts
+                    and not f.startswith(("~$", "._", ".~"))):
                 files.append(os.path.join(folder, f))
     return files

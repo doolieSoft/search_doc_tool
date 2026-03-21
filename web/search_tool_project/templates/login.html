@@ -1,0 +1,103 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="fr" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connexion — Search Doc Tool</title>
+  <link rel="stylesheet" href="{% static 'search_tool/style.css' %}?v=7">
+  <style>
+    .login-wrap {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-box {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 36px 40px;
+      width: 340px;
+    }
+    .login-box h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .login-box .subtitle {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 28px;
+    }
+    .login-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 16px;
+    }
+    .login-field label {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .login-field input {
+      width: 100%;
+    }
+    .btn-login {
+      width: 100%;
+      background: var(--green);
+      color: #fff;
+      font-weight: bold;
+      padding: 9px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      margin-top: 8px;
+      font-family: inherit;
+      transition: background 0.15s;
+    }
+    .btn-login:hover { background: #35956A; }
+    .login-error {
+      background: #3A1A1A;
+      border: 1px solid var(--red);
+      border-radius: 6px;
+      color: var(--red);
+      padding: 8px 12px;
+      font-size: 12px;
+      margin-bottom: 16px;
+    }
+  </style>
+  <script>
+    (function() {
+      const saved = localStorage.getItem('theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', saved);
+    })();
+  </script>
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-box">
+      <h1>🔍 Search Doc Tool</h1>
+      <p class="subtitle">Connexion requise</p>
+
+      {% if form.errors %}
+      <div class="login-error">Identifiant ou mot de passe incorrect.</div>
+      {% endif %}
+
+      <form method="post">
+        {% csrf_token %}
+        <div class="login-field">
+          <label for="id_username">Identifiant</label>
+          <input type="text" id="id_username" name="username" autofocus autocomplete="username">
+        </div>
+        <div class="login-field">
+          <label for="id_password">Mot de passe</label>
+          <input type="password" id="id_password" name="password" autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn-login">Se connecter</button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

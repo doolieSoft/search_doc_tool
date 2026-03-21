@@ -1,0 +1,42 @@
+{% if error %}
+<div class="alert-error">⚠ {{ error }}</div>
+{% elif results %}
+<div class="results-header">
+  <span class="results-count">{{ results|length }} occurrence(s)</span>
+  {% if total_files %}<span class="hint"> dans {{ total_files }} fichier(s)</span>{% endif %}
+</div>
+
+<table class="results-table" id="results-table">
+  <thead>
+    <tr>
+      <th style="width:260px">Fichier</th>
+      <th style="width:130px">Terme</th>
+      <th>Contexte</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in results %}
+    <tr class="{% cycle 'row-odd' 'row-even' %}{% if r.term == 'ERREUR' %} row-error{% endif %}">
+      <td>
+        {% if r.term != 'ERREUR' %}
+        <a class="file-link"
+           href="/serve/?path={{ r.file_encoded }}{% if r.page %}&term={{ r.term|urlencode }}&page={{ r.page }}#page={{ r.page }}{% endif %}"
+           target="_blank"
+           title="{{ r.file }}">
+          {{ r.filename }}
+        </a>
+        {% if r.page %}<span class="page-badge">p.{{ r.page }}</span>{% endif %}
+        {% else %}
+        <span class="error-name" title="{{ r.file }}">{{ r.filename }}</span>
+        {% endif %}
+      </td>
+      <td class="term-cell">{{ r.term }}</td>
+      <td class="context-cell">{{ r.context_html|safe }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% else %}
+<div class="no-results">Aucun résultat.</div>
+{% endif %}

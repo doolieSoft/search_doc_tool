@@ -1,0 +1,372 @@
+{% extends "search_tool/base.html" %}
+
+{% block content %}
+<div class="layout">
+
+  <!-- Barre latérale favoris -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <span class="sidebar-title"><i class="fa-solid fa-star"></i> Favoris</span>
+    </div>
+    <ul class="sidebar-list">
+      {% for fav in favorites %}
+      <li class="sidebar-item">
+        <button type="button" class="sidebar-fav-btn"
+                onclick="const el=document.getElementById('id_folder');el.value='{{ fav.path|escapejs }}';el.dispatchEvent(new Event('input'))"
+                title="{{ fav.path }}"
+                data-path="{{ fav.path|escapejs }}">
+          <i class="fa-solid fa-folder"></i> <span class="fav-label">{{ fav.name }}</span>
+        </button>
+        <button type="button" class="sidebar-fav-rename" title="Renommer"
+                onclick="renameFavorite('{{ fav.path|escapejs }}', this)">
+          <i class="fa-solid fa-pen"></i>
+        </button>
+        <button type="button" class="sidebar-fav-remove" title="Supprimer"
+                onclick="removeFavorite('{{ fav.path|escapejs }}')">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </li>
+      {% empty %}
+      <li class="sidebar-empty">Aucun favori</li>
+      {% endfor %}
+    </ul>
+  </aside>
+
+  <!-- Resize handle -->
+  <div id="sidebar-resizer" class="sidebar-resizer"></div>
+
+  <!-- Contenu principal -->
+  <div class="main-content">
+    <header class="app-header">
+      <h1><i class="fa-solid fa-magnifying-glass"></i> Search Doc Tool</h1>
+      <p class="subtitle">Recherche dans vos fichiers Word &amp; PDF</p>
+    </header>
+
+    <main class="app-main">
+      <form method="post" action="/search/" id="search-form"
+            hx-post="/search/"
+            hx-target="#results"
+            hx-indicator="#spinner"
+            hx-on::before-request="document.getElementById('results').innerHTML=''">
+        {% csrf_token %}
+
+        <!-- Dossier -->
+        <div class="field-row">
+          <label for="id_folder">Dossier</label>
+          <div class="input-group">
+            <input type="text" id="id_folder" name="folder"
+                   value="{{ config.folder|default:'' }}"
+                   placeholder="Chemin du dossier à analyser…"
+                   autocomplete="off">
+            <button type="button" class="btn-secondary"
+                    onclick="openBrowser('id_folder')">Parcourir</button>
+            <button type="button" class="btn-fav" title="Ajouter aux favoris"
+                    onclick="addFavorite()"><i class="fa-solid fa-star"></i></button>
+          </div>
+        </div>
+
+        <!-- Termes -->
+        <div class="field-row">
+          <label for="id_terms">Termes</label>
+          <div class="input-group">
+            <input type="text" id="id_terms" name="terms"
+                   placeholder='espace = OR   +  = AND   "..." = phrase exacte'
+                   autocomplete="off">
+            <span class="hint">espace=OR  +  =AND  "…"=exact</span>
+          </div>
+        </div>
+
+        <!-- Options + boutons -->
+        <div class="options-row">
+          <label class="checkbox-label">
+            <input type="checkbox" name="case_sensitive" id="id_case">
+            Casse
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" name="whole_word" id="id_word">
+            Mot entier
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" name="recurse" id="id_recurse"
+                   {% if config.recurse != False %}checked{% endif %}>
+            Sous-dossiers
+          </label>
+
+          <div class="btn-group">
+            <button type="submit" class="btn-search" id="btn-search">
+              <i class="fa-solid fa-magnifying-glass"></i> Lancer
+            </button>
+            <button type="button" class="btn-stop-search" id="btn-stop-search"
+                    onclick="stopSearch()" style="display:none">
+              <i class="fa-solid fa-xmark"></i> Stopper
+            </button>
+            <button type="button" class="btn-index" id="btn-index"
+                    onclick="startIndexing()">
+              <i class="fa-solid fa-gear"></i> Indexer
+            </button>
+            <button type="button" class="btn-stop" id="btn-stop"
+                    onclick="stopIndexing()" style="display:none">
+              <i class="fa-solid fa-xmark"></i> Arrêter
+            </button>
+          </div>
+
+          <!-- Index summary -->
+          {% if index_summary.total %}
+          <span id="index-badge"
+                class="index-badge {% if index_summary.indexed == index_summary.total %}ok{% else %}warn clickable{% endif %}"
+                {% if index_summary.indexed != index_summary.total %}onclick="showUnindexed()" title="Voir les fichiers non indexés"{% endif %}>
+            {% if index_summary.indexed == index_summary.total %}
+              <i class="fa-solid fa-check"></i> {{ index_summary.total }} indexés
+            {% else %}
+              <i class="fa-solid fa-triangle-exclamation"></i> {{ index_summary.indexed }}/{{ index_summary.total }} indexés
+            {% endif %}
+          </span>
+          {% else %}
+          <span id="index-badge" class="index-badge"></span>
+          {% endif %}
+        </div>
+
+      </form>
+
+      <!-- Statut indexation + barre de progression -->
+      <div id="index-status-row" style="display:none" class="progress-wrap">
+        <div class="progress-track">
+          <div class="progress-bar" id="index-progress-bar"></div>
+        </div>
+        <span id="index-status" class="hint"></span>
+      </div>
+
+      <!-- Spinner HTMX -->
+      <div id="spinner" class="spinner htmx-indicator">Recherche en cours…</div>
+
+      <!-- Results (HTMX target) -->
+      <div id="results"></div>
+    </main>
+  </div>
+</div>
+
+<!-- Unindexed files modal -->
+<div id="unindexed-modal" class="modal-overlay" style="display:none"
+     onclick="if(event.target===this)closeUnindexed()">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-path">Fichiers non indexés</span>
+      <button class="btn-close" onclick="closeUnindexed()">✕</button>
+    </div>
+    <ul id="unindexed-list" class="simple-list"></ul>
+    <div class="modal-footer" style="font-size:11px;color:var(--muted)">
+      Ces fichiers sont scannés, protégés ou dans un format non supporté.
+    </div>
+  </div>
+</div>
+
+<!-- Directory browser modal -->
+<div id="browser-modal" class="modal-overlay" style="display:none"
+     onclick="if(event.target===this)closeBrowser()">
+  <div class="modal">
+    <div class="modal-header">
+      <span id="browser-path" class="modal-path" data-path=""></span>
+      <button class="btn-close" onclick="closeBrowser()">✕</button>
+    </div>
+    <ul id="browser-list" class="browser-list"></ul>
+    <div class="modal-footer">
+      <button class="btn-search" onclick="selectCurrentDir()">
+        Sélectionner ce dossier
+      </button>
+      <button class="btn-secondary" onclick="closeBrowser()">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── Sidebar resize ──────────────────────────────────────────────────────
+  const sidebar = document.querySelector('.sidebar');
+  const resizer = document.getElementById('sidebar-resizer');
+
+  const savedWidth = localStorage.getItem('sidebarWidth');
+  if (savedWidth) sidebar.style.width = savedWidth + 'px';
+
+  resizer.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    function onMouseMove(e) {
+      const newWidth = Math.min(400, Math.max(140, e.clientX));
+      sidebar.style.width = newWidth + 'px';
+    }
+    function onMouseUp() {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      localStorage.setItem('sidebarWidth', sidebar.offsetWidth);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    }
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+
+  // Reset badge and fetch fresh summary when the folder changes
+  let _folderDebounce = null;
+  document.getElementById('id_folder').addEventListener('input', function() {
+    const folder = this.value.trim();
+    const badge = document.getElementById('index-badge');
+
+    // Effacer résultats, termes et badge
+    document.getElementById('results').innerHTML = '';
+    document.getElementById('id_terms').value = '';
+    badge.textContent = '';
+    badge.className = 'index-badge';
+    badge.onclick = null;
+    badge.title = '';
+
+    if (!folder) {
+      document.getElementById('index-status-row').style.display = 'none';
+      document.getElementById('btn-stop').style.display = 'none';
+      document.getElementById('btn-index').disabled = false;
+      return;
+    }
+
+    // Vérifier si ce dossier est en cours d'indexation
+    fetch('/index/status/')
+      .then(r => r.json())
+      .then(data => {
+        if (data.running && data.folder === folder) {
+          document.getElementById('index-status-row').style.display = 'flex';
+          document.getElementById('btn-stop').style.display = '';
+          document.getElementById('btn-index').disabled = true;
+          document.getElementById('index-status').textContent = 'Indexation en cours…';
+          if (!indexPollTimer) {
+            indexPollTimer = setInterval(pollIndexStatus, 500);
+          }
+        } else {
+          document.getElementById('index-status-row').style.display = 'none';
+          document.getElementById('btn-stop').style.display = 'none';
+          document.getElementById('btn-index').disabled = false;
+        }
+      })
+      .catch(() => {
+        document.getElementById('index-status-row').style.display = 'none';
+        document.getElementById('btn-stop').style.display = 'none';
+        document.getElementById('btn-index').disabled = false;
+      });
+
+    // Mettre à jour le badge après 400ms
+    clearTimeout(_folderDebounce);
+    _folderDebounce = setTimeout(() => {
+      const recurse = document.getElementById('id_recurse').checked;
+      fetch('/index/summary/?folder=' + encodeURIComponent(folder) + '&recurse=' + recurse)
+        .then(r => r.json())
+        .then(s => {
+          if (s.total === 0) return;
+          if (s.indexed === s.total) {
+            badge.innerHTML = '<i class="fa-solid fa-check"></i> ' + s.total + ' indexés';
+            badge.className = 'index-badge ok';
+          } else {
+            badge.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> ' + s.indexed + '/' + s.total + ' indexés';
+            badge.className = 'index-badge warn clickable';
+            badge.onclick = () => showUnindexed();
+            badge.title = 'Voir les fichiers non indexés';
+          }
+        });
+    }, 400);
+  });
+
+  function showUnindexed() {
+    const list = document.getElementById('unindexed-list');
+    list.innerHTML = '<li style="color:var(--muted);padding:12px 16px">Chargement…</li>';
+    document.getElementById('unindexed-modal').style.display = 'flex';
+
+    const folder = document.getElementById('id_folder').value.trim();
+    const recurse = document.getElementById('id_recurse').checked;
+    fetch('/index/unindexed/?folder=' + encodeURIComponent(folder) + '&recurse=' + recurse)
+      .then(r => r.json())
+      .then(data => {
+        list.innerHTML = '';
+        if (!data.files.length) {
+          list.innerHTML = '<li style="color:var(--muted);padding:12px 16px">Aucun fichier non indexé.</li>';
+        } else {
+          data.paths.forEach((path, i) => {
+            const li = document.createElement('li');
+            li.style.cssText = 'cursor:default';
+            const dot = document.createElement('span');
+            dot.style.cssText = 'color:var(--muted);font-size:10px;margin-right:6px';
+            dot.textContent = '\u2022';
+            const name = document.createElement('span');
+            name.title = path;
+            name.textContent = data.files[i];
+            li.appendChild(dot);
+            li.appendChild(name);
+            list.appendChild(li);
+          });
+        }
+      });
+  }
+
+  function closeUnindexed() {
+    document.getElementById('unindexed-modal').style.display = 'none';
+  }
+
+  function renameFavorite(path, renameBtn) {
+    const item = renameBtn.closest('.sidebar-item');
+    const favBtn = item.querySelector('.sidebar-fav-btn');
+    const currentName = item.querySelector('.fav-label').textContent.trim();
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = currentName;
+    input.className = 'sidebar-rename-input';
+
+    favBtn.style.display = 'none';
+    renameBtn.style.display = 'none';
+    item.insertBefore(input, renameBtn);
+    input.focus();
+    input.select();
+
+    function restore() {
+      input.remove();
+      favBtn.style.display = '';
+      renameBtn.style.display = '';
+    }
+
+    function save() {
+      const newName = input.value.trim();
+      if (!newName || newName === currentName) { restore(); return; }
+      const fd = new FormData();
+      fd.append('path', path);
+      fd.append('name', newName);
+      fd.append('csrfmiddlewaretoken', getCsrfToken());
+      fetch('/favorites/rename/', {method: 'POST', body: fd})
+        .then(() => {
+          item.querySelector('.fav-label').textContent = newName;
+          restore();
+        });
+    }
+
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { input.removeEventListener('blur', save); restore(); }
+    });
+  }
+
+  function addFavorite() {
+    const folder = document.getElementById('id_folder').value.trim();
+    if (!folder) return;
+    const fd = new FormData();
+    fd.append('folder', folder);
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+    fetch('/favorites/add/', {method: 'POST', body: fd})
+      .then(() => location.reload());
+  }
+
+  function removeFavorite(path) {
+    if (!confirm('Supprimer ce favori ?')) return;
+    const fd = new FormData();
+    fd.append('path', path);
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+    fetch('/favorites/remove/', {method: 'POST', body: fd})
+      .then(() => location.reload());
+  }
+</script>
+{% endblock %}

@@ -2,68 +2,92 @@
 
 *[Lire en français](README.fr.md)*
 
-A tool for searching terms across Word (.docx) and PDF files, with a modern dark-mode GUI.
+A tool for searching terms across Word (.docx) and PDF files. Available as a desktop app (PyQt6) and a web app (Django).
 
-![Application preview](screenshots/search_doc_tool.png)
+### Web app
+
+| Dark mode | Light mode |
+|---|---|
+| ![Web dark mode](screenshots/search_doc_tool_web_dark_mode.png) | ![Web light mode](screenshots/search_doc_tool_web_light_mode.png) |
 
 ## Features
 
 - Search through `.docx` and `.pdf` files (recursively or not)
 - Advanced query syntax:
   - Space-separated words → **OR** mode (at least one term)
-  - `+` operator → **AND** mode (all terms must be present in the file)
+  - `+` operator → **AND** mode (all terms must be present)
   - `"exact phrase"` → literal phrase search
 - Accent-insensitive search by default
 - Options: case sensitivity, whole-word matching
 - Context display around each match (highlighted term)
-- Page number for PDFs
-- CSV export
-- Favorites system for frequently used folders
-- Multi-threaded search (UI stays responsive) — ~500 files / 600 MB processed in about 3 minutes
-- SQLite FTS5 index version available for near-instant searches on already-indexed folders
+- Page number with direct link to the matching page in the PDF viewer
+- Favorites sidebar for frequently used folders (per user, resizable)
+- SQLite FTS5 index for near-instant searches on already-indexed folders
+- Background indexing with progress bar and stop button
+- Light/dark mode toggle
+
+## Web app — additional features
+
+- Multi-user: Django authentication (login required)
+- Per-folder shared index: one index per folder path, shared across all users
+- DOCX → PDF conversion via LibreOffice at indexing time
+- PDF served inline with highlighted search terms
+- Indexing status persisted in database (survives server restarts)
 
 ## Requirements
 
 - Python 3.12+
-- Dependencies:
+- **Web app only:** LibreOffice installed (DOCX → PDF conversion at indexing time)
+
+## Setup & Running
+
+### Desktop (PyQt6)
 
 ```bash
-pip install PyQt6 python-docx pymupdf
+cd desktop
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+python -m search_tool
 ```
 
-## Running
+### Web (Django) — development
 
 ```bash
-# Recommended — Python package (PyQt6 + SQLite FTS5 index)
-python -m search_tool
+cd web
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+cd search_tool_project
+python manage.py migrate
+python manage.py createsuperuser
+python manage.py runserver
+```
 
-# Legacy standalone scripts
-python search_tool_qt_fts.py       # PyQt6 with FTS5 index
-python search_tool_qt.py           # PyQt6 without index
-python search_tool_tkinter.py      # Tkinter alternative
+Then open `http://127.0.0.1:8000` in your browser.
+
+### Web (Django) — production (Waitress)
+
+```bash
+cd web/search_tool_project
+python manage.py collectstatic
+DJANGO_DEBUG=false python run.py --host 0.0.0.0 --port 8000
 ```
 
 ## Usage
 
-1. Select a folder containing the documents to search
-2. Enter one or more terms in the search bar
-3. Start the search — results appear in real time
-4. Double-click a result to open the file:
-   - **PDF**: opens at the matching page (SumatraPDF or Adobe Reader)
-   - **DOCX**: copies the context to the clipboard for quick Ctrl+F
+1. Select a folder from the favorites sidebar or type/browse a path
+2. Click **Indexer** to build the FTS5 index (first time or after adding files)
+3. Enter one or more terms and click **Lancer**
+4. Click a result to open the PDF at the matching page, with the term highlighted
 
-Frequently used folders can be saved as **favorites** (right-click to rename or delete).
+## Index & data storage
 
-## SQLite FTS5 Index
-
-The FTS5 version maintains a local index to speed up searches on previously browsed folders.
-
-- Click **"Indexer le dossier"** to index the current folder — the indicator shows the number of indexed files (`✅ Index à jour` or `⚠ N/M indexés`)
-- Subsequent searches use the FTS5 index for already-indexed files and direct search for the rest
-- The index is **global** (shared across all folders) but searches are always filtered to the selected folder
-- Files with no extractable text (scanned PDFs, protected files) are marked as processed and not retried
-- The index is stored in `.data/search_tool_index.db` in the application folder
+- Index stored per folder in `.data/folders/<folder_name>_<hash>/index.db`
+- Converted PDFs cached in `.data/pdf_cache/`
+- DOCX copies (network drive workaround) in `.data/docx_copy/`
+- Indexing status (start time, counts, errors) persisted in the Django database
 
 ## Configuration
 
-Configuration is automatically saved to `~/.search_tool_config.json` (last used folder, favorites).
+Last folder and recurse setting saved automatically to `~/.search_tool_config.json`. Favorites are stored per user in the Django database.
