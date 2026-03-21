@@ -55,7 +55,7 @@
       </div>
       <ul class="sidebar-list sidebar-group-items drop-zone" data-drop-group="{{ group.id }}">
         {% for fav in group.favorites.all %}
-        <li class="sidebar-item" data-path="{{ fav.path|escapejs }}">
+        <li class="sidebar-item" data-path="{{ fav.path }}">
           <button type="button" class="sidebar-fav-btn"
                   onclick="selectFolder('{{ fav.path|escapejs }}')"
                   title="{{ fav.path }}">
