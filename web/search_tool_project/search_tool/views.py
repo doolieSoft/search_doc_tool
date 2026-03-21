@@ -507,16 +507,19 @@ def serve_pdf(request):
     if not term:
         return FileResponse(open(serve_path, "rb"), content_type="application/pdf")
 
+    # AND mode produces "mot1 + mot2" — split to highlight each term individually.
+    highlight_terms = [t.strip() for t in term.split(" + ") if t.strip()]
+
     # Annotate highlights in memory, then redirect browser to the right page.
     doc = fitz.open(serve_path)
     page_idx = max(0, page_num - 1)
     for idx in range(len(doc)):
         page = doc[idx]
-        areas = page.search_for(term, quads=False)
-        for rect in areas:
-            annot = page.add_highlight_annot(rect)
-            annot.set_colors(stroke=(1, 0.85, 0))  # yellow
-            annot.update()
+        for ht in highlight_terms:
+            for rect in page.search_for(ht, quads=False):
+                annot = page.add_highlight_annot(rect)
+                annot.set_colors(stroke=(1, 0.85, 0))  # yellow
+                annot.update()
 
     buf = io.BytesIO()
     doc.save(buf, garbage=4, deflate=True)
