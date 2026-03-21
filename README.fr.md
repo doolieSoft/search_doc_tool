@@ -41,6 +41,7 @@ Outil de recherche de termes dans des fichiers Word (.docx) et PDF. Disponible e
 
 - Python 3.12+
 - **Application web uniquement :** LibreOffice installé (conversion DOCX → PDF à l'indexation)
+- **Application web — fortement recommandé :** Microsoft Word installé sur le serveur. L'automatisation COM Word est utilisée en priorité (plus rapide et meilleure fidélité) ; LibreOffice prend le relais en cas d'indisponibilité ou d'échec.
 
 ## Installation et lancement
 

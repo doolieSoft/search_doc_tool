@@ -43,6 +43,7 @@ A tool for searching terms across Word (.docx) and PDF files. Available as a des
 
 - Python 3.12+
 - **Web app only:** LibreOffice installed (DOCX → PDF conversion at indexing time)
+- **Web app — strongly recommended:** Microsoft Word installed on the server. Word COM automation is used as the primary converter (faster and higher fidelity); LibreOffice is the fallback when Word is unavailable or fails.
 
 ## Setup & Running
 
