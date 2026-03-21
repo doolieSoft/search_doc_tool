@@ -32,14 +32,13 @@ pip install PyQt6 python-docx pymupdf
 ## Lancement
 
 ```bash
-# Interface avec index SQLite FTS5 (recherches rapides)
-python search_tool_qt_fts.py
+# Recommandé — package Python (PyQt6 + index SQLite FTS5)
+python -m search_tool
 
-# Interface sans index (recherche directe dans les fichiers)
-python search_tool_qt.py
-
-# Interface alternative Tkinter
-python search_tool_tkinter.py
+# Scripts autonomes (ancienne version)
+python search_tool_qt_fts.py       # PyQt6 avec index FTS5
+python search_tool_qt.py           # PyQt6 sans index
+python search_tool_tkinter.py      # Alternative Tkinter
 ```
 
 ## Utilisation
@@ -53,7 +52,7 @@ python search_tool_tkinter.py
 
 Les dossiers fréquemment utilisés peuvent être sauvegardés dans les **favoris** (clic droit pour renommer ou supprimer).
 
-## Index SQLite FTS5 (`search_tool_qt_fts.py`)
+## Index SQLite FTS5
 
 La version FTS5 maintient un index local pour accélérer les recherches sur les dossiers déjà parcourus.
 
