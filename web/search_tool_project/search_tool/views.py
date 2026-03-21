@@ -46,8 +46,10 @@ _reset_running_on_startup()
 
 def _get_folder_db_path(folder: str) -> str:
     """Return the shared per-folder SQLite DB path, creating directories as needed."""
-    folder_hash = hashlib.md5(folder.encode("utf-8")).hexdigest()[:10]
-    folder_name = re.sub(r"[^\w\-]", "_", os.path.basename(folder.rstrip("/\\")) or "root")
+    # Normalize path: consistent slashes + lowercase (Windows is case-insensitive)
+    normalized = os.path.normpath(folder).lower()
+    folder_hash = hashlib.md5(normalized.encode("utf-8")).hexdigest()[:10]
+    folder_name = re.sub(r"[^\w\-]", "_", os.path.basename(normalized) or "root")
     db_dir = Path(settings.DATA_DIR) / "folders" / f"{folder_name}_{folder_hash}"
     db_dir.mkdir(parents=True, exist_ok=True)
     return str(db_dir / "index.db")
@@ -57,6 +59,9 @@ def _get_folder_db_path(folder: str) -> str:
 
 _index_state: dict = {
     "running": False,
+    "phase": "",       # "converting" | "indexing"
+    "conv_done": 0,
+    "conv_total": 0,
     "done": 0,
     "total": 0,
     "current": "",
@@ -86,13 +91,16 @@ def _run_indexing(folder: str, recurse: bool, db_file: str):
     docx_to_convert = [p for p in to_index if p.lower().endswith(".docx")]
     pdf_direct = [p for p in to_index if not p.lower().endswith(".docx")]
 
-    # Each DOCX counts twice (conversion + indexing), each PDF once (indexing only).
-    total = len(docx_to_convert) + len(to_index)
+    # Total = number of files to index (each file counted once).
+    total = len(to_index)
 
     from django.utils import timezone
     with _index_lock:
-        _index_state.update({"total": total, "done": 0, "newly_indexed": 0,
-                              "failed": 0, "current": ""})
+        _index_state.update({
+            "total": total, "done": 0, "newly_indexed": 0, "failed": 0,
+            "current": "", "phase": "converting" if docx_to_convert else "indexing",
+            "conv_done": 0, "conv_total": len(docx_to_convert),
+        })
     _persist_status(folder=folder, running=True, total=total, done=0,
                     newly_indexed=0, failed=0, current="", error=None,
                     started_at=timezone.now(), finished_at=None)
@@ -107,7 +115,7 @@ def _run_indexing(folder: str, recurse: bool, db_file: str):
     pdf_ready = []  # paths ready to index (original PDFs + successfully converted)
 
     if docx_to_convert:
-        lo_workers = min(4, len(docx_to_convert))
+        lo_workers = min(2, len(docx_to_convert))
 
         def _convert(path):
             return path, convert_docx_to_pdf(path, settings.PDF_CACHE_DIR,
@@ -132,7 +140,7 @@ def _run_indexing(folder: str, recurse: bool, db_file: str):
                 except Exception:
                     pdf_path = None
                 with _index_lock:
-                    _index_state["done"] += 1
+                    _index_state["conv_done"] += 1
                     _index_state["current"] = os.path.basename(path)
                 if pdf_path:
                     pdf_ready.append(path)
@@ -141,6 +149,9 @@ def _run_indexing(folder: str, recurse: bool, db_file: str):
                         _index_state["failed"] += 1
 
     pdf_ready.extend(pdf_direct)
+
+    with _index_lock:
+        _index_state["phase"] = "indexing"
 
     # ── Phase 2 : extract text + FTS5 insert in parallel ─────────────────────
     workers = min(8, os.cpu_count() or 4, max(1, len(pdf_ready)))
@@ -170,6 +181,8 @@ def _run_indexing(folder: str, recurse: bool, db_file: str):
 
     with _index_lock:
         _index_state["running"] = False
+    # Invalider le cache summary pour ce dossier
+    _summary_cache.clear()
     _persist_status(
         running=False,
         done=_index_state["done"],
@@ -196,14 +209,27 @@ def _highlight_context(context: str) -> str:
     return re.sub(r"\[([^\]]+)\]", r'<mark>\1</mark>', safe)
 
 
+_summary_cache: dict = {}  # (folder, recurse, db_file) → (timestamp, result)
+_SUMMARY_TTL = 30  # seconds
+
+
 def _get_index_summary(folder: str, recurse: bool, db_file: str) -> dict:
+    import time
+    key = (folder, recurse, db_file)
+    now = time.monotonic()
+    cached = _summary_cache.get(key)
+    if cached and now - cached[0] < _SUMMARY_TTL:
+        return cached[1]
     files = collect_files(folder, recurse)
     if not files:
-        return {"total": 0, "indexed": 0}
-    conn = get_db(db_file)
-    indexed = sum(1 for f in files if is_indexed(conn, f))
-    conn.close()
-    return {"total": len(files), "indexed": indexed}
+        result = {"total": 0, "indexed": 0}
+    else:
+        conn = get_db(db_file)
+        indexed = sum(1 for f in files if is_indexed(conn, f))
+        conn.close()
+        result = {"total": len(files), "indexed": indexed}
+    _summary_cache[key] = (now, result)
+    return result
 
 
 # ── Views ────────────────────────────────────────────────────────────────────
@@ -211,16 +237,11 @@ def _get_index_summary(folder: str, recurse: bool, db_file: str) -> dict:
 @login_required
 def index_view(request):
     cfg = load_config()
-    folder = cfg.get("folder", "")
     recurse = cfg.get("recurse", True)
-    index_summary = {}
-    if folder and os.path.isdir(folder):
-        db_file = _get_folder_db_path(folder)
-        index_summary = _get_index_summary(folder, recurse, db_file)
     return render(request, "search_tool/index.html", {
-        "config": cfg,
+        "config": {"recurse": recurse},
         "favorites": Favorite.objects.filter(user=request.user),
-        "index_summary": index_summary,
+        "index_summary": {},
     })
 
 
@@ -430,17 +451,35 @@ def serve_pdf(request):
     return response
 
 
+def _list_drives():
+    """Return available Windows drive letters (e.g. ['C:\\', 'I:\\'])."""
+    import string
+    return [f"{d}:\\" for d in string.ascii_uppercase if os.path.exists(f"{d}:\\")]
+
+
 @login_required
 @require_GET
 def browse_dir(request):
-    path = request.GET.get("path", os.path.expanduser("~"))
+    path = request.GET.get("path", "").strip()
+
+    # Empty path → show drive list
+    if not path:
+        drives = _list_drives()
+        entries = [{"name": d.rstrip("\\"), "path": d} for d in drives]
+        return JsonResponse({"path": "", "entries": entries, "drives": True})
+
     path = os.path.normpath(path)
     if not os.path.isdir(path):
-        path = os.path.expanduser("~")
+        drives = _list_drives()
+        entries = [{"name": d.rstrip("\\"), "path": d} for d in drives]
+        return JsonResponse({"path": "", "entries": entries, "drives": True})
 
     entries = []
     parent = os.path.dirname(path)
-    if parent != path:
+    # At drive root (e.g. C:\), parent == path → go back to drive list
+    if parent == path:
+        entries.append({"name": "← Lecteurs", "path": ""})
+    else:
         entries.append({"name": "..", "path": parent})
 
     try:
@@ -451,7 +490,7 @@ def browse_dir(request):
     except PermissionError:
         pass
 
-    return JsonResponse({"path": path, "entries": entries})
+    return JsonResponse({"path": path, "entries": entries, "drives": False})
 
 
 @login_required

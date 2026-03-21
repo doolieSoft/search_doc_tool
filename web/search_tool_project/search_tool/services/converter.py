@@ -130,10 +130,11 @@ def convert_docx_to_pdf(docx_path: str, cache_dir: str,
                 f"LibreOffice introuvable ({exe}). "
                 "Vérifiez l'installation ou ajoutez soffice.exe au PATH."
             )
-        except subprocess.TimeoutExpired:
-            pass
-        except Exception:
-            pass
+        except subprocess.TimeoutExpired as e:
+            e.process.kill()
+            logger.warning("LibreOffice timeout (>120s) pour %s", docx_path)
+        except Exception as e:
+            logger.warning("Erreur conversion %s : %s", docx_path, e)
 
     return None
 

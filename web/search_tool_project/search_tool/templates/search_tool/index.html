@@ -235,6 +235,7 @@
           document.getElementById('index-status-row').style.display = 'flex';
           document.getElementById('btn-stop').style.display = '';
           document.getElementById('btn-index').disabled = true;
+          document.getElementById('btn-search').disabled = true;
           document.getElementById('index-status').textContent = 'Indexation en cours…';
           if (!indexPollTimer) {
             indexPollTimer = setInterval(pollIndexStatus, 500);
@@ -243,6 +244,7 @@
           document.getElementById('index-status-row').style.display = 'none';
           document.getElementById('btn-stop').style.display = 'none';
           document.getElementById('btn-index').disabled = false;
+          document.getElementById('btn-search').disabled = false;
         }
       })
       .catch(() => {
@@ -269,7 +271,7 @@
             badge.title = 'Voir les fichiers non indexés';
           }
         });
-    }, 400);
+    }, 800);
   });
 
   function showUnindexed() {

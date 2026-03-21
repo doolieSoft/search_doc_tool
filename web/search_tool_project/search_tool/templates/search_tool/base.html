@@ -5,6 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Search Doc Tool</title>
+  <link rel="icon" type="image/svg+xml" href="{% static 'search_tool/favicon.svg' %}">
   <link rel="stylesheet" href="{% static 'search_tool/style.css' %}?v=12">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
   <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
@@ -57,6 +58,7 @@
       if (evt.detail.elt.id === 'search-form') {
         document.getElementById('btn-search').disabled = true;
         document.getElementById('btn-stop-search').style.display = '';
+        document.getElementById('btn-index').disabled = true;
         document.getElementById('index-status-row').style.display = 'none';
       }
     });
@@ -64,6 +66,7 @@
       if (evt.detail.elt.id === 'search-form') {
         document.getElementById('btn-search').disabled = false;
         document.getElementById('btn-stop-search').style.display = 'none';
+        document.getElementById('btn-index').disabled = false;
       }
     });
 
@@ -79,7 +82,7 @@
       const modal = document.getElementById('browser-modal');
       modal.style.display = 'flex';
       const current = browseTarget.value || '';
-      loadDir(current || document.location.hostname);
+      loadDir(current || '');
     }
 
     function closeBrowser() {
@@ -90,15 +93,18 @@
       fetch('/browse/?path=' + encodeURIComponent(path))
         .then(r => r.json())
         .then(data => {
-          document.getElementById('browser-path').textContent = data.path;
-          document.getElementById('browser-path').dataset.path = data.path;
+          const pathEl = document.getElementById('browser-path');
+          pathEl.textContent = data.drives ? 'Lecteurs' : data.path;
+          pathEl.dataset.path = data.path;
           const list = document.getElementById('browser-list');
           list.innerHTML = '';
           data.entries.forEach(e => {
             const li = document.createElement('li');
             li.textContent = e.name;
             li.dataset.path = e.path;
+            li.dataset.isDrive = data.drives ? 'true' : 'false';
             li.onclick = () => loadDir(e.path);
+            if (data.drives) li.style.fontWeight = '600';
             list.appendChild(li);
           });
         });
@@ -140,6 +146,7 @@
         .then(r => r.json())
         .then(data => {
           if (data.started) {
+            document.getElementById('btn-search').disabled = true;
             indexPollTimer = setInterval(pollIndexStatus, 500);
           } else {
             btn.disabled = false;
@@ -173,7 +180,11 @@
             return;
           }
 
-          if (data.total > 0) {
+          if (data.phase === 'converting' && data.conv_total > 0) {
+            const pct = Math.round((data.conv_done / data.conv_total) * 100);
+            bar.style.width = pct + '%';
+            status.textContent = 'Conversion ' + data.conv_done + '/' + data.conv_total + ' — ' + data.current;
+          } else if (data.total > 0) {
             const pct = Math.round((data.done / data.total) * 100);
             bar.style.width = pct + '%';
             status.textContent = data.done + '/' + data.total + ' — ' + data.current;
@@ -181,6 +192,7 @@
 
           if (!data.running) {
             clearInterval(indexPollTimer);
+            document.getElementById('btn-search').disabled = false;
             document.getElementById('btn-index').disabled = false;
             document.getElementById('btn-stop').style.display = 'none';
 
