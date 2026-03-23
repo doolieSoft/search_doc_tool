@@ -1,0 +1,760 @@
+{% extends "search_tool/base.html" %}
+
+{% block content %}
+<div class="layout">
+
+  <!-- Barre latérale favoris -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <span class="sidebar-title"><i class="fa-solid fa-star"></i> Favoris</span>
+      <div style="display:flex;gap:4px">
+        <button type="button" class="btn-new-group" onclick="createGroup()" title="Nouveau dossier">
+          <i class="fa-solid fa-folder-plus"></i>
+        </button>
+        {% if request.user.is_superuser %}
+        <button type="button" class="btn-new-group" onclick="openBrowseRoots()" title="Dossiers autorisés pour le navigateur">
+          <i class="fa-solid fa-gear"></i>
+        </button>
+        <button type="button" class="btn-new-group" onclick="openCleanup()" title="Nettoyage des données orphelines">
+          <i class="fa-solid fa-broom"></i>
+        </button>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Favoris sans dossier -->
+    <ul class="sidebar-list drop-zone" data-drop-group="">
+      {% for fav in ungrouped_favorites %}
+      <li class="sidebar-item" data-path="{{ fav.path }}">
+        <button type="button" class="sidebar-fav-btn"
+                onclick="selectFolder('{{ fav.path|escapejs }}')"
+                title="{{ fav.path }}">
+          <i class="fa-solid fa-folder"></i> <span class="fav-label">{{ fav.name }}</span>
+        </button>
+        <button type="button" class="sidebar-fav-rename" title="Renommer"
+                onclick="renameFavorite('{{ fav.path|escapejs }}', this)">
+          <i class="fa-solid fa-pen"></i>
+        </button>
+        <button type="button" class="sidebar-fav-remove" title="Supprimer"
+                onclick="removeFavorite('{{ fav.path|escapejs }}')">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </li>
+      {% empty %}
+      <li class="sidebar-drop-hint">Aucun favori</li>
+      {% endfor %}
+    </ul>
+
+    <!-- Dossiers de favoris -->
+    {% for group in groups %}
+    <div class="sidebar-group" data-group-id="{{ group.id }}">
+      <div class="sidebar-group-header drop-zone" data-drop-group="{{ group.id }}">
+        <button type="button" class="sidebar-group-toggle" onclick="toggleGroup({{ group.id }})">
+          <i class="fa-solid fa-folder"></i>
+          <span class="group-label">{{ group.name }}</span>
+          <i class="fa-solid fa-chevron-down group-arrow"></i>
+        </button>
+        <button type="button" class="sidebar-fav-rename" title="Renommer"
+                onclick="renameGroup({{ group.id }}, this)">
+          <i class="fa-solid fa-pen"></i>
+        </button>
+        <button type="button" class="sidebar-fav-remove" title="Supprimer"
+                onclick="deleteGroup({{ group.id }})">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <ul class="sidebar-list sidebar-group-items drop-zone" data-drop-group="{{ group.id }}">
+        {% for fav in group.favorites.all %}
+        <li class="sidebar-item" data-path="{{ fav.path }}">
+          <button type="button" class="sidebar-fav-btn"
+                  onclick="selectFolder('{{ fav.path|escapejs }}')"
+                  title="{{ fav.path }}">
+            <i class="fa-solid fa-folder"></i> <span class="fav-label">{{ fav.name }}</span>
+          </button>
+          <button type="button" class="sidebar-fav-rename" title="Renommer"
+                  onclick="renameFavorite('{{ fav.path|escapejs }}', this)">
+            <i class="fa-solid fa-pen"></i>
+          </button>
+          <button type="button" class="sidebar-fav-remove" title="Supprimer"
+                  onclick="removeFavorite('{{ fav.path|escapejs }}')">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </li>
+        {% empty %}
+        <li class="sidebar-drop-hint">Glisser un favori ici</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+  </aside>
+
+  <!-- Resize handle -->
+  <div id="sidebar-resizer" class="sidebar-resizer"></div>
+
+  <!-- Contenu principal -->
+  <div class="main-content">
+    <header class="app-header">
+      <h1><i class="fa-solid fa-magnifying-glass"></i> Search Doc Tool</h1>
+      <p class="subtitle">Recherche dans vos fichiers Word &amp; PDF</p>
+    </header>
+    <div id="global-index-banner" class="global-index-banner" style="display:none">
+      <i class="fa-solid fa-gear fa-spin"></i>
+      <span id="global-index-banner-text"></span>
+    </div>
+
+    <main class="app-main">
+      <form method="post" action="/search/" id="search-form"
+            hx-post="/search/"
+            hx-target="#results"
+            hx-indicator="#spinner"
+            hx-on::before-request="document.getElementById('results').innerHTML=''">
+        {% csrf_token %}
+
+        <!-- Dossier -->
+        <div class="field-row">
+          <label for="id_folder">Dossier</label>
+          <div class="input-group">
+            <input type="text" id="id_folder" name="folder"
+                   value="{{ config.folder|default:'' }}"
+                   placeholder="Chemin du dossier à analyser…"
+                   autocomplete="off">
+            <button type="button" class="btn-secondary"
+                    onclick="openBrowser('id_folder')">Parcourir</button>
+            <button type="button" class="btn-fav" title="Ajouter aux favoris"
+                    onclick="addFavorite()"><i class="fa-solid fa-star"></i></button>
+          </div>
+        </div>
+
+        <!-- Termes -->
+        <div class="field-row">
+          <label for="id_terms">Termes</label>
+          <div class="input-group">
+            <input type="text" id="id_terms" name="terms"
+                   placeholder='espace = OR   +  = AND   "..." = phrase exacte'
+                   autocomplete="off">
+            <span class="hint">espace=OR  +  =AND  "…"=exact</span>
+          </div>
+        </div>
+
+        <!-- Options + boutons -->
+        <div class="options-row">
+          <label class="checkbox-label">
+            <input type="checkbox" name="case_sensitive" id="id_case">
+            Casse
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" name="whole_word" id="id_word">
+            Mot entier
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" name="recurse" id="id_recurse"
+                   {% if config.recurse != False %}checked{% endif %}>
+            Sous-dossiers
+          </label>
+
+          <div class="btn-group">
+            <button type="submit" class="btn-search" id="btn-search">
+              <i class="fa-solid fa-magnifying-glass"></i> Lancer
+            </button>
+            <button type="button" class="btn-stop-search" id="btn-stop-search"
+                    onclick="stopSearch()" style="display:none">
+              <i class="fa-solid fa-xmark"></i> Stopper
+            </button>
+            <button type="button" class="btn-index" id="btn-index"
+                    onclick="startIndexing()">
+              <i class="fa-solid fa-gear"></i> Indexer
+            </button>
+            <button type="button" class="btn-stop" id="btn-stop"
+                    onclick="stopIndexing()" style="display:none">
+              <i class="fa-solid fa-xmark"></i> Arrêter
+            </button>
+          </div>
+
+          <!-- Index summary -->
+          {% if index_summary.total %}
+          <span id="index-badge"
+                class="index-badge {% if index_summary.indexed == index_summary.total %}ok{% else %}warn clickable{% endif %}"
+                {% if index_summary.indexed != index_summary.total %}onclick="showUnindexed()" title="Voir les fichiers non indexés"{% endif %}>
+            {% if index_summary.indexed == index_summary.total %}
+              <i class="fa-solid fa-check"></i> {{ index_summary.total }} indexés
+            {% else %}
+              <i class="fa-solid fa-triangle-exclamation"></i> {{ index_summary.indexed }}/{{ index_summary.total }} indexés
+            {% endif %}
+          </span>
+          {% else %}
+          <span id="index-badge" class="index-badge"></span>
+          {% endif %}
+        </div>
+
+      </form>
+
+      <!-- Statut indexation + barre de progression -->
+      <div id="index-status-row" style="display:none" class="progress-wrap">
+        <div class="progress-track">
+          <div class="progress-bar" id="index-progress-bar"></div>
+        </div>
+        <span id="index-status" class="hint"></span>
+      </div>
+
+      <!-- Spinner HTMX -->
+      <div id="spinner" class="spinner htmx-indicator">Recherche en cours…</div>
+
+      <!-- Results (HTMX target) -->
+      <div id="results"></div>
+    </main>
+  </div>
+</div>
+
+<!-- Unindexed files modal -->
+<div id="unindexed-modal" class="modal-overlay" style="display:none"
+     onclick="if(event.target===this)closeUnindexed()">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-path">Fichiers non indexés</span>
+      <button class="btn-close" onclick="closeUnindexed()">✕</button>
+    </div>
+    <ul id="unindexed-list" class="simple-list"></ul>
+    <div class="modal-footer" style="font-size:11px;color:var(--muted)">
+      Ces fichiers sont scannés, protégés ou dans un format non supporté.
+    </div>
+  </div>
+</div>
+
+<!-- Browse roots modal (superuser) -->
+{% if request.user.is_superuser %}
+<div id="browse-roots-modal" class="modal-overlay" style="display:none"
+     onclick="if(event.target===this)closeBrowseRoots()">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-path"><i class="fa-solid fa-gear"></i> Dossiers autorisés (navigateur)</span>
+      <button class="btn-close" onclick="closeBrowseRoots()">✕</button>
+    </div>
+    <div id="browse-roots-body" style="padding:12px 16px;font-size:13px;min-height:60px">
+      <span style="color:var(--muted)">Chargement…</span>
+    </div>
+    <div class="modal-footer" style="flex-direction:column;gap:8px;align-items:stretch">
+      <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:6px;align-items:center">
+        <input id="new-root-label" type="text" class="folder-input" placeholder="Libellé" style="font-size:13px">
+        <input id="new-root-path" type="text" class="folder-input" placeholder="Ex: I:\Projets\RH" style="font-size:13px">
+        <button class="btn-search" onclick="addBrowseRoot()" style="white-space:nowrap">
+          <i class="fa-solid fa-plus"></i> Ajouter
+        </button>
+      </div>
+      <div id="new-root-error" style="color:var(--red);font-size:12px;display:none"></div>
+      <button class="btn-secondary" onclick="closeBrowseRoots()">Fermer</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Cleanup modal (superuser) -->
+{% if request.user.is_superuser %}
+<div id="cleanup-modal" class="modal-overlay" style="display:none"
+     onclick="if(event.target===this)closeCleanup()">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-path"><i class="fa-solid fa-broom"></i> Nettoyage des données orphelines</span>
+      <button class="btn-close" onclick="closeCleanup()">✕</button>
+    </div>
+    <div id="cleanup-body" style="padding:12px 16px;font-size:13px">
+      <span style="color:var(--muted)">Chargement…</span>
+    </div>
+    <div class="modal-footer" style="gap:8px">
+      <button class="btn-search" id="btn-cleanup-delete" style="display:none"
+              onclick="executeCleanup()">
+        <i class="fa-solid fa-trash"></i> Supprimer les dossiers orphelins
+      </button>
+      <button class="btn-secondary" onclick="closeCleanup()">Fermer</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Directory browser modal -->
+<div id="browser-modal" class="modal-overlay" style="display:none"
+     onclick="if(event.target===this)closeBrowser()">
+  <div class="modal">
+    <div class="modal-header">
+      <span id="browser-path" class="modal-path" data-path=""></span>
+      <button class="btn-close" onclick="closeBrowser()">✕</button>
+    </div>
+    <ul id="browser-list" class="browser-list"></ul>
+    <div class="modal-footer">
+      <button class="btn-search" onclick="selectCurrentDir()">
+        Sélectionner ce dossier
+      </button>
+      <button class="btn-secondary" onclick="closeBrowser()">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── Sidebar resize ──────────────────────────────────────────────────────
+  const sidebar = document.querySelector('.sidebar');
+  const resizer = document.getElementById('sidebar-resizer');
+
+  const savedWidth = localStorage.getItem('sidebarWidth');
+  if (savedWidth) sidebar.style.width = savedWidth + 'px';
+
+  resizer.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    function onMouseMove(e) {
+      const newWidth = Math.min(400, Math.max(140, e.clientX));
+      sidebar.style.width = newWidth + 'px';
+    }
+    function onMouseUp() {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      localStorage.setItem('sidebarWidth', sidebar.offsetWidth);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    }
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+
+  // Reset badge and fetch fresh summary when the folder changes
+  let _folderDebounce = null;
+  document.getElementById('id_folder').addEventListener('input', function() {
+    const folder = this.value.trim();
+    const badge = document.getElementById('index-badge');
+
+    // Effacer résultats, termes et badge
+    document.getElementById('results').innerHTML = '';
+    document.getElementById('id_terms').value = '';
+    badge.textContent = '';
+    badge.className = 'index-badge';
+    badge.onclick = null;
+    badge.title = '';
+
+    if (!folder) {
+      document.getElementById('index-status-row').style.display = 'none';
+      document.getElementById('btn-stop').style.display = 'none';
+      document.getElementById('btn-index').disabled = false;
+      return;
+    }
+
+    // Vérifier si ce dossier est en cours d'indexation
+    fetch('/index/status/')
+      .then(r => r.json())
+      .then(data => {
+        if (data.running && data.folder === folder) {
+          document.getElementById('index-status-row').style.display = 'flex';
+          document.getElementById('btn-stop').style.display = '';
+          document.getElementById('btn-index').disabled = true;
+          document.getElementById('btn-search').disabled = true;
+          document.getElementById('index-status').textContent = 'Indexation en cours…';
+          if (!indexPollTimer) {
+            indexPollTimer = setInterval(pollIndexStatus, 500);
+          }
+        } else if (data.running) {
+          // Autre dossier en cours d'indexation : on ne peut pas en lancer un autre
+          document.getElementById('index-status-row').style.display = 'none';
+          document.getElementById('btn-stop').style.display = 'none';
+          document.getElementById('btn-index').disabled = true;
+          document.getElementById('btn-search').disabled = false;
+          const banner = document.getElementById('global-index-banner');
+          document.getElementById('global-index-banner-text').textContent =
+            'Indexation en cours sur : ' + data.folder;
+          banner.style.display = 'flex';
+        } else {
+          document.getElementById('index-status-row').style.display = 'none';
+          document.getElementById('btn-stop').style.display = 'none';
+          document.getElementById('btn-index').disabled = false;
+          document.getElementById('btn-search').disabled = false;
+          document.getElementById('global-index-banner').style.display = 'none';
+        }
+      })
+      .catch(() => {
+        document.getElementById('index-status-row').style.display = 'none';
+        document.getElementById('btn-stop').style.display = 'none';
+        document.getElementById('btn-index').disabled = false;
+      });
+
+    // Mettre à jour le badge après 400ms
+    clearTimeout(_folderDebounce);
+    _folderDebounce = setTimeout(() => {
+      const recurse = document.getElementById('id_recurse').checked;
+      fetch('/index/summary/?folder=' + encodeURIComponent(folder) + '&recurse=' + recurse)
+        .then(r => r.json())
+        .then(s => {
+          if (s.total === 0) return;
+          if (s.indexed === s.total) {
+            badge.innerHTML = '<i class="fa-solid fa-check"></i> ' + s.total + ' indexés';
+            badge.className = 'index-badge ok';
+          } else {
+            badge.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> ' + s.indexed + '/' + s.total + ' indexés';
+            badge.className = 'index-badge warn clickable';
+            badge.onclick = () => showUnindexed();
+            badge.title = 'Voir les fichiers non indexés';
+          }
+        });
+    }, 800);
+  });
+
+  function showUnindexed() {
+    const list = document.getElementById('unindexed-list');
+    list.innerHTML = '<li style="color:var(--muted);padding:12px 16px">Chargement…</li>';
+    document.getElementById('unindexed-modal').style.display = 'flex';
+
+    const folder = document.getElementById('id_folder').value.trim();
+    const recurse = document.getElementById('id_recurse').checked;
+    fetch('/index/unindexed/?folder=' + encodeURIComponent(folder) + '&recurse=' + recurse)
+      .then(r => r.json())
+      .then(data => {
+        list.innerHTML = '';
+        if (!data.files.length) {
+          list.innerHTML = '<li style="color:var(--muted);padding:12px 16px">Aucun fichier non indexé.</li>';
+        } else {
+          data.paths.forEach((path, i) => {
+            const li = document.createElement('li');
+            li.style.cssText = 'cursor:default';
+            const dot = document.createElement('span');
+            dot.style.cssText = 'color:var(--muted);font-size:10px;margin-right:6px';
+            dot.textContent = '\u2022';
+            const name = document.createElement('span');
+            name.title = path;
+            name.textContent = data.files[i];
+            li.appendChild(dot);
+            li.appendChild(name);
+            list.appendChild(li);
+          });
+        }
+      });
+  }
+
+  function closeUnindexed() {
+    document.getElementById('unindexed-modal').style.display = 'none';
+  }
+
+  function renameFavorite(path, renameBtn) {
+    const item = renameBtn.closest('.sidebar-item');
+    const favBtn = item.querySelector('.sidebar-fav-btn');
+    const currentName = item.querySelector('.fav-label').textContent.trim();
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = currentName;
+    input.className = 'sidebar-rename-input';
+
+    favBtn.style.display = 'none';
+    renameBtn.style.display = 'none';
+    item.insertBefore(input, renameBtn);
+    input.focus();
+    input.select();
+
+    function restore() {
+      input.remove();
+      favBtn.style.display = '';
+      renameBtn.style.display = '';
+    }
+
+    function save() {
+      const newName = input.value.trim();
+      if (!newName || newName === currentName) { restore(); return; }
+      const fd = new FormData();
+      fd.append('path', path);
+      fd.append('name', newName);
+      fd.append('csrfmiddlewaretoken', getCsrfToken());
+      fetch('/favorites/rename/', {method: 'POST', body: fd})
+        .then(() => {
+          item.querySelector('.fav-label').textContent = newName;
+          restore();
+        });
+    }
+
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { input.removeEventListener('blur', save); restore(); }
+    });
+  }
+
+  function selectFolder(path) {
+    const el = document.getElementById('id_folder');
+    el.value = path;
+    el.dispatchEvent(new Event('input'));
+  }
+
+  function addFavorite() {
+    const folder = document.getElementById('id_folder').value.trim();
+    if (!folder) return;
+    const fd = new FormData();
+    fd.append('folder', folder);
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+    fetch('/favorites/add/', {method: 'POST', body: fd})
+      .then(() => location.reload());
+  }
+
+  function removeFavorite(path) {
+    if (!confirm('Supprimer ce favori ?')) return;
+    const fd = new FormData();
+    fd.append('path', path);
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+    fetch('/favorites/remove/', {method: 'POST', body: fd})
+      .then(() => location.reload());
+  }
+
+  // ── Groupes de favoris ───────────────────────────────────────────────────
+
+  function createGroup() {
+    const name = prompt('Nom du dossier :');
+    if (!name || !name.trim()) return;
+    const fd = new FormData();
+    fd.append('name', name.trim());
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+    fetch('/favorites/groups/create/', {method: 'POST', body: fd})
+      .then(() => location.reload());
+  }
+
+  function deleteGroup(groupId) {
+    if (!confirm('Supprimer ce dossier ? Les favoris seront déplacés hors du dossier.')) return;
+    const fd = new FormData();
+    fd.append('group_id', groupId);
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+    fetch('/favorites/groups/delete/', {method: 'POST', body: fd})
+      .then(() => location.reload());
+  }
+
+  function renameGroup(groupId, renameBtn) {
+    const header = renameBtn.closest('.sidebar-group-header');
+    const label = header.querySelector('.group-label');
+    const toggle = header.querySelector('.sidebar-group-toggle');
+    const currentName = label.textContent.trim();
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = currentName;
+    input.className = 'sidebar-rename-input';
+
+    toggle.style.display = 'none';
+    renameBtn.style.display = 'none';
+    header.insertBefore(input, renameBtn);
+    input.focus();
+    input.select();
+
+    function restore() {
+      input.remove();
+      toggle.style.display = '';
+      renameBtn.style.display = '';
+    }
+    function save() {
+      const newName = input.value.trim();
+      if (!newName || newName === currentName) { restore(); return; }
+      const fd = new FormData();
+      fd.append('group_id', groupId);
+      fd.append('name', newName);
+      fd.append('csrfmiddlewaretoken', getCsrfToken());
+      fetch('/favorites/groups/rename/', {method: 'POST', body: fd})
+        .then(() => { label.textContent = newName; restore(); });
+    }
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { input.removeEventListener('blur', save); restore(); }
+    });
+  }
+
+  function toggleGroup(groupId) {
+    const group = document.querySelector(`.sidebar-group[data-group-id="${groupId}"]`);
+    const items = group.querySelector('.sidebar-group-items');
+    const arrow = group.querySelector('.group-arrow');
+    const collapsed = items.style.display === 'none';
+    items.style.display = collapsed ? '' : 'none';
+    arrow.style.transform = collapsed ? '' : 'rotate(-90deg)';
+    const key = 'grp_collapsed_' + groupId;
+    collapsed ? localStorage.removeItem(key) : localStorage.setItem(key, '1');
+  }
+
+  // Restore collapsed state on load
+  document.querySelectorAll('.sidebar-group').forEach(group => {
+    const groupId = group.dataset.groupId;
+    if (localStorage.getItem('grp_collapsed_' + groupId)) {
+      const items = group.querySelector('.sidebar-group-items');
+      const arrow = group.querySelector('.group-arrow');
+      if (items) items.style.display = 'none';
+      if (arrow) arrow.style.transform = 'rotate(-90deg)';
+    }
+  });
+
+  // ── Drag & drop favoris ──────────────────────────────────────────────────
+
+  let _draggedPath = null;
+
+  // ── Dossiers autorisés (superuser) ──────────────────────────────────────
+  function openBrowseRoots() {
+    document.getElementById('browse-roots-modal').style.display = 'flex';
+    loadBrowseRoots();
+  }
+  function closeBrowseRoots() {
+    document.getElementById('browse-roots-modal').style.display = 'none';
+  }
+  function loadBrowseRoots() {
+    const body = document.getElementById('browse-roots-body');
+    body.innerHTML = '<span style="color:var(--muted)">Chargement…</span>';
+    fetch('/admin/browse-roots/')
+      .then(r => r.json())
+      .then(data => {
+        if (!data.roots.length) {
+          body.innerHTML = '<p style="color:var(--muted);margin:0">Aucun dossier configuré.<br>Sans configuration, les superutilisateurs voient les lecteurs du serveur ; les autres utilisateurs ne peuvent pas naviguer.</p>';
+          return;
+        }
+        let html = '<ul style="margin:0;padding:0;list-style:none">';
+        data.roots.forEach(r => {
+          html += `<li style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);gap:8px">
+            <div>
+              <span style="font-weight:600">${r.label}</span>
+              <span style="display:block;font-size:11px;color:var(--muted);font-family:monospace">${r.path}</span>
+            </div>
+            <button class="sidebar-fav-remove" onclick="removeBrowseRoot(${r.id})" title="Supprimer">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </li>`;
+        });
+        html += '</ul>';
+        body.innerHTML = html;
+      });
+  }
+  function addBrowseRoot() {
+    const label = document.getElementById('new-root-label').value.trim();
+    const path = document.getElementById('new-root-path').value.trim();
+    const errEl = document.getElementById('new-root-error');
+    errEl.style.display = 'none';
+    if (!label || !path) { errEl.textContent = 'Libellé et chemin requis.'; errEl.style.display = ''; return; }
+    const fd = new FormData();
+    fd.append('label', label);
+    fd.append('path', path);
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+    fetch('/admin/browse-roots/add/', {method: 'POST', body: fd})
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) { errEl.textContent = data.error; errEl.style.display = ''; return; }
+        document.getElementById('new-root-label').value = '';
+        document.getElementById('new-root-path').value = '';
+        loadBrowseRoots();
+      });
+  }
+  function removeBrowseRoot(id) {
+    if (!confirm('Retirer ce dossier de la liste des dossiers autorisés ?')) return;
+    const fd = new FormData();
+    fd.append('id', id);
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+    fetch('/admin/browse-roots/remove/', {method: 'POST', body: fd})
+      .then(() => loadBrowseRoots());
+  }
+
+  // ── Nettoyage (superuser) ────────────────────────────────────────────────
+  function openCleanup() {
+    document.getElementById('cleanup-modal').style.display = 'flex';
+    const body = document.getElementById('cleanup-body');
+    const btn = document.getElementById('btn-cleanup-delete');
+    body.innerHTML = '<span style="color:var(--muted)">Chargement…</span>';
+    btn.style.display = 'none';
+    fetch('/admin/cleanup/preview/')
+      .then(r => r.json())
+      .then(data => {
+        if (!data.orphaned.length) {
+          body.innerHTML = '<span style="color:var(--green)"><i class="fa-solid fa-check"></i> Aucun dossier orphelin — rien à nettoyer.</span>';
+          return;
+        }
+        let html = '<p style="margin:0 0 10px;color:var(--muted)">Ces dossiers ne sont plus référencés dans les favoris d\'aucun utilisateur :</p><ul style="margin:0;padding:0;list-style:none">';
+        data.orphaned.forEach(o => {
+          html += `<li style="padding:4px 0;display:flex;justify-content:space-between;gap:16px">
+            <span style="font-family:monospace;font-size:12px">${o.name}</span>
+            <span style="color:var(--muted);flex-shrink:0">${o.size_human}</span>
+          </li>`;
+        });
+        html += '</ul>';
+        body.innerHTML = html;
+        btn.style.display = '';
+      })
+      .catch(() => { body.innerHTML = '<span style="color:var(--red)">Erreur lors du chargement.</span>'; });
+  }
+
+  function closeCleanup() {
+    document.getElementById('cleanup-modal').style.display = 'none';
+  }
+
+  function executeCleanup() {
+    if (!confirm('Supprimer définitivement ces dossiers et leurs données (index, PDFs convertis) ?')) return;
+    const btn = document.getElementById('btn-cleanup-delete');
+    btn.disabled = true;
+    const fd = new FormData();
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+    fetch('/admin/cleanup/execute/', {method: 'POST', body: fd})
+      .then(r => r.json())
+      .then(data => {
+        const body = document.getElementById('cleanup-body');
+        body.innerHTML = `<span style="color:var(--green)"><i class="fa-solid fa-check"></i> ${data.count} dossier(s) supprimé(s).</span>`;
+        btn.style.display = 'none';
+      });
+  }
+
+  // ── Drag & drop (mousedown/mousemove/mouseup, car les boutons bloquent le drag HTML5) ──
+  let _dnd = null; // { path, item, ghost, started }
+
+  document.addEventListener('mousedown', e => {
+    const btn = e.target.closest('.sidebar-fav-btn');
+    if (!btn) return;
+    const item = btn.closest('.sidebar-item');
+    if (!item || e.button !== 0) return;
+    e.preventDefault();
+    _dnd = { path: item.dataset.path, item, ghost: null, started: false,
+             startX: e.clientX, startY: e.clientY };
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!_dnd) return;
+    const dist = Math.hypot(e.clientX - _dnd.startX, e.clientY - _dnd.startY);
+    if (!_dnd.started && dist > 6) {
+      _dnd.started = true;
+      _dnd.item.classList.add('dragging');
+      const ghost = document.createElement('div');
+      ghost.className = 'drag-ghost';
+      ghost.textContent = _dnd.item.querySelector('.fav-label').textContent;
+      document.body.appendChild(ghost);
+      _dnd.ghost = ghost;
+    }
+    if (_dnd.started) {
+      _dnd.ghost.style.left = (e.clientX + 14) + 'px';
+      _dnd.ghost.style.top  = (e.clientY + 6)  + 'px';
+      document.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('drop-zone-active'));
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const zone = el && el.closest('.drop-zone');
+      if (zone) zone.classList.add('drop-zone-active');
+    }
+  });
+
+  document.addEventListener('mouseup', e => {
+    if (!_dnd) return;
+    const wasDrag = _dnd.started;
+    if (_dnd.ghost) { _dnd.ghost.style.display = 'none'; }
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const zone = el && el.closest('.drop-zone');
+    if (_dnd.ghost) _dnd.ghost.remove();
+    _dnd.item.classList.remove('dragging');
+    document.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('drop-zone-active'));
+    const path = _dnd.path;
+    _dnd = null;
+
+    if (wasDrag && zone) {
+      // Empêcher le click qui suit le mouseup de changer le dossier
+      document.addEventListener('click', function swallow(ce) {
+        ce.stopImmediatePropagation(); ce.preventDefault();
+        document.removeEventListener('click', swallow, true);
+      }, true);
+      const groupId = zone.dataset.dropGroup;
+      const fd = new FormData();
+      fd.append('path', path);
+      fd.append('group_id', groupId);
+      fd.append('csrfmiddlewaretoken', getCsrfToken());
+      fetch('/favorites/move/', {method: 'POST', body: fd})
+        .then(() => location.reload())
+        .catch(err => console.error('[DnD] fetch error:', err));
+    }
+  });
+</script>
+{% endblock %}

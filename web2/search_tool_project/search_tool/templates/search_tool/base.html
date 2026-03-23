@@ -1,0 +1,260 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Search Doc Tool</title>
+  <link rel="icon" type="image/svg+xml" href="{% static 'search_tool/favicon.svg' %}">
+  <link rel="stylesheet" href="{% static 'search_tool/style.css' %}?v=18">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+</head>
+<body>
+  <div class="topbar-right">
+    <span class="topbar-user">{{ request.user.username }}</span>
+    <form method="post" action="/logout/" style="display:inline">
+      {% csrf_token %}
+      <button type="submit" class="btn-logout" title="Se déconnecter"><i class="fa-solid fa-right-from-bracket"></i></button>
+    </form>
+    <button class="btn-theme" id="btn-theme" onclick="toggleTheme()" title="Changer le thème"></button>
+  </div>
+  <div class="app">
+    {% block content %}{% endblock %}
+  </div>
+
+  <script>
+    // ── Theme ────────────────────────────────────────────────────────────────
+    (function() {
+      const saved = localStorage.getItem('theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', saved);
+      document.getElementById('btn-theme').innerHTML = saved === 'dark'
+        ? '<i class="fa-solid fa-moon"></i>'
+        : '<i class="fa-solid fa-sun"></i>';
+    })();
+
+    function toggleTheme() {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('theme', next);
+      document.getElementById('btn-theme').innerHTML = next === 'dark'
+        ? '<i class="fa-solid fa-moon"></i>'
+        : '<i class="fa-solid fa-sun"></i>';
+    }
+
+    function getCsrfToken() {
+      return document.querySelector('[name=csrfmiddlewaretoken]').value;
+    }
+
+    // ── HTMX error handling ──────────────────────────────────────────────────
+    document.addEventListener('htmx:responseError', function(evt) {
+      document.getElementById('results').innerHTML =
+        '<div class="alert-error">⚠ Erreur serveur (' + evt.detail.xhr.status + '). Vérifiez la console Django.</div>';
+    });
+
+    // ── Search stop button ───────────────────────────────────────────────────
+    document.addEventListener('htmx:beforeRequest', function(evt) {
+      if (evt.detail.elt.id === 'search-form') {
+        document.getElementById('btn-search').disabled = true;
+        document.getElementById('btn-stop-search').style.display = '';
+        document.getElementById('btn-index').disabled = true;
+        document.getElementById('index-status-row').style.display = 'none';
+      }
+    });
+    document.addEventListener('htmx:afterRequest', function(evt) {
+      if (evt.detail.elt.id === 'search-form') {
+        document.getElementById('btn-search').disabled = false;
+        document.getElementById('btn-stop-search').style.display = 'none';
+        document.getElementById('btn-index').disabled = false;
+      }
+    });
+
+    function stopSearch() {
+      htmx.trigger(document.getElementById('search-form'), 'htmx:abort');
+    }
+
+    // ── Directory browser modal ──────────────────────────────────────────────
+    let browseTarget = null;
+
+    function openBrowser(inputId) {
+      browseTarget = document.getElementById(inputId);
+      const modal = document.getElementById('browser-modal');
+      modal.style.display = 'flex';
+      const current = browseTarget.value || '';
+      loadDir(current || '');
+    }
+
+    function closeBrowser() {
+      document.getElementById('browser-modal').style.display = 'none';
+    }
+
+    function loadDir(path) {
+      fetch('/browse/?path=' + encodeURIComponent(path))
+        .then(r => r.json())
+        .then(data => {
+          const pathEl = document.getElementById('browser-path');
+          const list = document.getElementById('browser-list');
+          if (data.error) {
+            pathEl.textContent = '';
+            pathEl.dataset.path = '';
+            list.innerHTML = '<li style="color:var(--red);padding:8px 0">' + data.error + '</li>';
+            return;
+          }
+          if (data.mode === 'roots') pathEl.textContent = 'Dossiers autorisés';
+          else if (data.mode === 'drives') pathEl.textContent = 'Lecteurs';
+          else pathEl.textContent = data.path;
+          pathEl.dataset.path = data.path;
+          list.innerHTML = '';
+          data.entries.forEach(e => {
+            const li = document.createElement('li');
+            if (e.sub) {
+              const nameSpan = document.createElement('span');
+              nameSpan.style.fontWeight = '600';
+              nameSpan.textContent = e.name;
+              const subSpan = document.createElement('span');
+              subSpan.style.cssText = 'display:block;font-size:11px;color:var(--muted);font-family:monospace';
+              subSpan.textContent = e.sub;
+              li.appendChild(nameSpan);
+              li.appendChild(subSpan);
+            } else {
+              li.textContent = e.name;
+              if (data.mode === 'drives') li.style.fontWeight = '600';
+            }
+            li.dataset.path = e.path;
+            li.onclick = () => loadDir(e.path);
+            list.appendChild(li);
+          });
+        });
+    }
+
+    function selectCurrentDir() {
+      const path = document.getElementById('browser-path').dataset.path;
+      if (browseTarget) browseTarget.value = path;
+      closeBrowser();
+    }
+
+    // ── Index status polling ─────────────────────────────────────────────────
+    let indexPollTimer = null;
+
+    function startIndexing() {
+      const folder = document.getElementById('id_folder').value.trim();
+      const recurse = document.getElementById('id_recurse').checked;
+
+      if (!folder) {
+        document.getElementById('index-status').textContent = '⚠ Entrez un dossier d\'abord.';
+        document.getElementById('index-status-row').style.display = 'flex';
+        return;
+      }
+
+      const btn = document.getElementById('btn-index');
+      const btnStop = document.getElementById('btn-stop');
+      btn.disabled = true;
+      btnStop.style.display = '';
+      document.getElementById('index-status').textContent = 'Indexation en cours…';
+      document.getElementById('index-status-row').style.display = 'flex';
+      document.getElementById('index-progress-bar').style.width = '0%';
+
+      const fd = new FormData();
+      fd.append('folder', folder);
+      fd.append('recurse', recurse ? 'true' : 'false');
+      fd.append('csrfmiddlewaretoken', getCsrfToken());
+
+      fetch('/index/start/', {method: 'POST', body: fd})
+        .then(r => r.json())
+        .then(data => {
+          if (data.started) {
+            document.getElementById('btn-search').disabled = true;
+            indexPollTimer = setInterval(pollIndexStatus, 500);
+          } else {
+            btn.disabled = false;
+            document.getElementById('index-status').textContent = '⚠ ' + (data.error || 'Erreur');
+          }
+        })
+        .catch(err => {
+          btn.disabled = false;
+          document.getElementById('index-status').textContent = '⚠ Erreur réseau : ' + err;
+        });
+    }
+
+    function stopIndexing() {
+      const fd = new FormData();
+      fd.append('csrfmiddlewaretoken', getCsrfToken());
+      fetch('/index/stop/', {method: 'POST', body: fd});
+    }
+
+    function pollIndexStatus() {
+      fetch('/index/status/')
+        .then(r => r.json())
+        .then(data => {
+          const bar = document.getElementById('index-progress-bar');
+          const status = document.getElementById('index-status');
+
+          if (data.error) {
+            clearInterval(indexPollTimer);
+            document.getElementById('btn-index').disabled = false;
+            document.getElementById('btn-stop').style.display = 'none';
+            status.textContent = '⚠ ' + data.error;
+            return;
+          }
+
+          if (data.phase === 'converting' && data.conv_total > 0) {
+            const pct = Math.round((data.conv_done / data.conv_total) * 100);
+            bar.style.width = pct + '%';
+            status.textContent = 'Conversion ' + data.conv_done + '/' + data.conv_total + ' — ' + data.current;
+          } else if (data.total > 0) {
+            const pct = Math.round((data.done / data.total) * 100);
+            bar.style.width = pct + '%';
+            status.textContent = data.done + '/' + data.total + ' — ' + data.current;
+          }
+
+          if (!data.running) {
+            clearInterval(indexPollTimer);
+            document.getElementById('btn-search').disabled = false;
+            document.getElementById('btn-index').disabled = false;
+            document.getElementById('btn-stop').style.display = 'none';
+            const banner = document.getElementById('global-index-banner');
+            if (banner) banner.style.display = 'none';
+
+            let msg = '✅ ' + data.newly_indexed + ' fichier(s) indexé(s)';
+            if (data.newly_indexed === 0 && data.failed === 0) {
+              msg = '✅ Index déjà à jour';
+            } else if (data.failed > 0 && data.newly_indexed === 0) {
+              msg = '⚠ ' + data.failed + ' fichier(s) non indexés (scannés, protégés ou format non supporté)';
+            } else if (data.failed > 0) {
+              msg = '✅ ' + data.newly_indexed + ' indexé(s), ⚠ ' + data.failed + ' non indexés';
+            }
+            status.textContent = msg;
+
+            // Refresh badge without full page reload
+            const folder = document.getElementById('id_folder').value.trim();
+            const recurse = document.getElementById('id_recurse').checked;
+            fetch('/index/summary/?folder=' + encodeURIComponent(folder) + '&recurse=' + recurse)
+              .then(r => r.json())
+              .then(s => {
+                const badge = document.getElementById('index-badge');
+                if (!badge) return;
+                if (s.total === 0) { badge.textContent = ''; badge.className = 'index-badge'; badge.onclick = null; return; }
+                if (s.indexed === s.total) {
+                  badge.textContent = '✅ ' + s.total + ' indexés';
+                  badge.className = 'index-badge ok';
+                  badge.onclick = null;
+                  badge.title = '';
+                } else {
+                  badge.textContent = '⚠ ' + s.indexed + '/' + s.total + ' indexés';
+                  badge.className = 'index-badge warn clickable';
+                  badge.onclick = () => showUnindexed();
+                  badge.title = 'Voir les fichiers non indexés';
+                }
+              });
+          }
+        })
+        .catch(err => {
+          clearInterval(indexPollTimer);
+          document.getElementById('btn-index').disabled = false;
+          document.getElementById('index-status').textContent = '⚠ Erreur polling : ' + err;
+        });
+    }
+  </script>
+</body>
+</html>

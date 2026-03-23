@@ -384,8 +384,11 @@ def search_view(request):
         r["folder_encoded"] = folder_encoded
         r["context_html"] = _highlight_context(r["context"])
 
+    matched_files = len({r["file"] for r in all_results if r["term"] != "ERREUR"})
+
     return render(request, "search_tool/_results.html", {
         "results": all_results,
+        "matched_files": matched_files,
         "total_files": len(files),
     })
 
