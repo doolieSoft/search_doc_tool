@@ -35,6 +35,9 @@ A tool for searching terms across Word (.docx) and PDF files. Available as a des
 - Indexing status persisted in database (survives server restarts)
 - Robust background indexing: stale job detection, automatic recovery after unexpected shutdown
 - Favorites organized into named groups (create, rename, delete, drag & drop between groups)
+- Favorite aliases: set a custom display name per folder (path shown by default)
+- Non-indexable file tracking: files that fail indexing (password-protected, read errors) are flagged separately and displayed in the badge (e.g. "392 indexed • 6 non-indexable")
+- Optimized search on large folders: indexed files are searched directly from the FTS5 database (no disk I/O), unindexed files fall back to PDF reading
 - **Superuser tools:**
   - Configure allowed root directories for the file browser (users cannot navigate outside these paths)
   - Orphaned data cleanup: remove `.data/folders/` directories no longer referenced by any favorite
@@ -60,7 +63,7 @@ python -m search_tool
 ### Web (Django) — development
 
 ```bash
-cd web
+cd web2
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
@@ -75,7 +78,7 @@ Then open `http://127.0.0.1:8000` in your browser.
 ### Web (Django) — production (Waitress)
 
 ```bash
-cd web/search_tool_project
+cd web2/search_tool_project
 python manage.py collectstatic
 DJANGO_DEBUG=false python run.py --host 0.0.0.0 --port 8000
 ```
@@ -89,9 +92,10 @@ DJANGO_DEBUG=false python run.py --host 0.0.0.0 --port 8000
 
 ## Index & data storage
 
-- Index stored per folder in `.data/folders/<folder_name>_<hash>/index.db`
-- Converted PDFs cached in `.data/pdf_cache/`
-- DOCX copies (network drive workaround) in `.data/docx_copy/`
+- Per-folder data stored in `.data/folders/<folder_name>_<hash>/`:
+  - `index.db` — FTS5 SQLite index (one row per page)
+  - `pdf_cache/` — converted PDFs (content-addressed, invalidated on file change)
+  - `docx_copy/` — local DOCX copies (network drive workaround)
 - Indexing status (start time, counts, errors) persisted in the Django database
 
 ## Configuration

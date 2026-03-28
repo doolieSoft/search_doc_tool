@@ -33,6 +33,9 @@ Outil de recherche de termes dans des fichiers Word (.docx) et PDF. Disponible e
 - Statut d'indexation persisté en base de données (survit aux redémarrages serveur)
 - Indexation robuste : détection de job bloqué, reprise automatique après arrêt inattendu
 - Favoris organisables en dossiers (créer, renommer, supprimer, glisser-déposer entre dossiers)
+- Alias sur les favoris : nom d'affichage personnalisé par dossier (le chemin complet est affiché par défaut)
+- Suivi des fichiers non indexables : les fichiers en échec (protégés par mot de passe, erreur de lecture) sont signalés séparément dans le badge (ex : "392 indexés • 6 non indexables")
+- Recherche optimisée sur les grands corpus : les fichiers indexés sont interrogés directement depuis la base FTS5 (aucune lecture disque), les non-indexés passent par la lecture PDF
 - **Outils superutilisateur :**
   - Configuration des dossiers autorisés pour le navigateur de fichiers (les utilisateurs ne peuvent pas naviguer en dehors de ces chemins)
   - Nettoyage des données orphelines : suppression des répertoires `.data/folders/` non référencés par aucun favori
@@ -58,7 +61,7 @@ python -m search_tool
 ### Web (Django) — développement
 
 ```bash
-cd web
+cd web2
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
@@ -73,7 +76,7 @@ Puis ouvrir `http://127.0.0.1:8000` dans le navigateur.
 ### Web (Django) — production (Waitress)
 
 ```bash
-cd web/search_tool_project
+cd web2/search_tool_project
 python manage.py collectstatic
 DJANGO_DEBUG=false python run.py --host 0.0.0.0 --port 8000
 ```
@@ -87,9 +90,10 @@ DJANGO_DEBUG=false python run.py --host 0.0.0.0 --port 8000
 
 ## Index et stockage des données
 
-- Index stocké par dossier dans `.data/folders/<nom_dossier>_<hash>/index.db`
-- PDFs convertis mis en cache dans `.data/pdf_cache/`
-- Copies DOCX (contournement lecteur réseau) dans `.data/docx_copy/`
+- Données stockées par dossier dans `.data/folders/<nom_dossier>_<hash>/` :
+  - `index.db` — index FTS5 SQLite (une ligne par page)
+  - `pdf_cache/` — PDFs convertis (adressés par contenu, invalidés si le fichier change)
+  - `docx_copy/` — copies locales des DOCX (contournement lecteur réseau)
 - Statut d'indexation (heure de début, compteurs, erreurs) persisté dans la base Django
 
 ## Configuration
