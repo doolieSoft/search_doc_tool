@@ -15,7 +15,7 @@ class IndexSummaryView(LoginRequiredMixin, View):
         folder = request.GET.get("folder", "").strip()
         recurse = request.GET.get("recurse", "true") == "true"
         if not folder or not os.path.isdir(folder):
-            return JsonResponse({"total": 0, "indexed": 0})
+            return JsonResponse({"total": 0, "indexed": 0, "failed": 0})
         db_file = get_folder_paths(folder, settings.DATA_DIR)["db"]
         index_svc = IndexService(db_file=db_file)
         search_svc = SearchService()

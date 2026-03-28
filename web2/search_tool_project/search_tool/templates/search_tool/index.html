@@ -29,7 +29,7 @@
         <button type="button" class="sidebar-fav-btn"
                 onclick="selectFolder('{{ fav.path|escapejs }}')"
                 title="{{ fav.path }}">
-          <i class="fa-solid fa-folder"></i> <span class="fav-label">{{ fav.name }}</span>
+          <i class="fa-solid fa-folder"></i> <span class="fav-label">{% if fav.name != fav.path %}{{ fav.name }}{% else %}{{ fav.path }}{% endif %}</span>
         </button>
         <button type="button" class="sidebar-fav-rename" title="Renommer"
                 onclick="renameFavorite('{{ fav.path|escapejs }}', this)">
@@ -69,7 +69,7 @@
           <button type="button" class="sidebar-fav-btn"
                   onclick="selectFolder('{{ fav.path|escapejs }}')"
                   title="{{ fav.path }}">
-            <i class="fa-solid fa-folder"></i> <span class="fav-label">{{ fav.name }}</span>
+            <i class="fa-solid fa-folder"></i> <span class="fav-label">{% if fav.name != fav.path %}{{ fav.name }}{% else %}{{ fav.path }}{% endif %}</span>
           </button>
           <button type="button" class="sidebar-fav-rename" title="Renommer"
                   onclick="renameFavorite('{{ fav.path|escapejs }}', this)">
@@ -198,6 +198,13 @@
 
       <!-- Spinner HTMX -->
       <div id="spinner" class="spinner htmx-indicator">Recherche en cours…</div>
+
+      <!-- Avertissement dossier non indexé -->
+      <div id="index-hint" style="display:none" class="alert-index-hint">
+        <i class="fa-solid fa-circle-info"></i>
+        <span id="index-hint-text"></span>
+        Cliquez sur <strong>Indexer</strong> pour accélérer les prochaines recherches.
+      </div>
 
       <!-- Results (HTMX target) -->
       <div id="results"></div>
@@ -381,15 +388,33 @@
       fetch('/index/summary/?folder=' + encodeURIComponent(folder) + '&recurse=' + recurse)
         .then(r => r.json())
         .then(s => {
+          const hint = document.getElementById('index-hint');
+          const hintText = document.getElementById('index-hint-text');
           if (s.total === 0) return;
-          if (s.indexed === s.total) {
-            badge.innerHTML = '<i class="fa-solid fa-check"></i> ' + s.total + ' indexés';
-            badge.className = 'index-badge ok';
+          const failed = s.failed || 0;
+          const pending = s.total - s.indexed - failed;
+          const allDone = pending === 0; // tout traité : indexés + non indexables = total
+
+          if (allDone) {
+            let badgeText = s.total + ' fichiers • ' + s.indexed + ' indexés';
+            if (failed > 0) badgeText += ' • ' + failed + ' non indexable(s)';
+            badge.innerHTML = '<i class="fa-solid fa-check"></i> ' + badgeText;
+            badge.className = 'index-badge ok' + (failed > 0 ? ' clickable' : '');
+            badge.onclick = failed > 0 ? () => showUnindexed() : null;
+            badge.title = failed > 0 ? 'Voir les fichiers non indexables' : '';
+            hint.style.display = 'none';
           } else {
-            badge.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> ' + s.indexed + '/' + s.total + ' indexés';
+            let badgeText = s.total + ' fichiers • ' + s.indexed + ' indexés';
+            if (failed > 0) badgeText += ' • ' + failed + ' non indexable(s)';
+            badgeText += ' • ' + pending + ' en attente';
+            badge.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> ' + badgeText;
             badge.className = 'index-badge warn clickable';
             badge.onclick = () => showUnindexed();
             badge.title = 'Voir les fichiers non indexés';
+            hintText.textContent = s.indexed === 0
+              ? 'Ce dossier n\'est pas encore indexé (' + pending + ' fichier(s)). '
+              : pending + ' fichier(s) ne sont pas encore indexés. ';
+            hint.style.display = '';
           }
         });
     }, 800);
@@ -409,16 +434,23 @@
         if (!data.files.length) {
           list.innerHTML = '<li style="color:var(--muted);padding:12px 16px">Aucun fichier non indexé.</li>';
         } else {
-          data.paths.forEach((path, i) => {
+          data.files.forEach(f => {
             const li = document.createElement('li');
             li.style.cssText = 'cursor:default';
-            const dot = document.createElement('span');
-            dot.style.cssText = 'color:var(--muted);font-size:10px;margin-right:6px';
-            dot.textContent = '\u2022';
+            const icon = document.createElement('i');
+            if (f.status === 'failed') {
+              icon.className = 'fa-solid fa-ban';
+              icon.style.cssText = 'color:var(--red);font-size:10px;margin-right:6px';
+              icon.title = 'Non indexable (protégé, illisible ou format non supporté)';
+            } else {
+              icon.className = 'fa-solid fa-clock';
+              icon.style.cssText = 'color:var(--muted);font-size:10px;margin-right:6px';
+              icon.title = 'En attente d\'indexation';
+            }
             const name = document.createElement('span');
-            name.title = path;
-            name.textContent = data.files[i];
-            li.appendChild(dot);
+            name.title = f.path;
+            name.textContent = f.name;
+            li.appendChild(icon);
             li.appendChild(name);
             list.appendChild(li);
           });
@@ -433,35 +465,47 @@
   function renameFavorite(path, renameBtn) {
     const item = renameBtn.closest('.sidebar-item');
     const favBtn = item.querySelector('.sidebar-fav-btn');
-    const currentName = item.querySelector('.fav-label').textContent.trim();
+    // Current alias: empty string if label is showing the path (no alias set)
+    const labelEl = item.querySelector('.fav-label');
+    const currentAlias = labelEl.textContent.trim() === path ? '' : labelEl.textContent.trim();
+
+    const wrap = document.createElement('div');
+    wrap.className = 'sidebar-rename-wrap';
+
+    const pathLabel = document.createElement('span');
+    pathLabel.className = 'sidebar-rename-path';
+    pathLabel.textContent = path;
 
     const input = document.createElement('input');
     input.type = 'text';
-    input.value = currentName;
+    input.value = currentAlias;
+    input.placeholder = 'Alias (vide = afficher le chemin)';
     input.className = 'sidebar-rename-input';
+
+    wrap.appendChild(pathLabel);
+    wrap.appendChild(input);
 
     favBtn.style.display = 'none';
     renameBtn.style.display = 'none';
-    item.insertBefore(input, renameBtn);
+    item.insertBefore(wrap, renameBtn);
     input.focus();
-    input.select();
 
     function restore() {
-      input.remove();
+      wrap.remove();
       favBtn.style.display = '';
       renameBtn.style.display = '';
     }
 
     function save() {
-      const newName = input.value.trim();
-      if (!newName || newName === currentName) { restore(); return; }
+      const alias = input.value.trim();
+      const newName = alias || path; // empty alias → store path as name
       const fd = new FormData();
       fd.append('path', path);
       fd.append('name', newName);
       fd.append('csrfmiddlewaretoken', getCsrfToken());
       fetch('/favorites/rename/', {method: 'POST', body: fd})
         .then(() => {
-          item.querySelector('.fav-label').textContent = newName;
+          labelEl.textContent = alias || path;
           restore();
         });
     }

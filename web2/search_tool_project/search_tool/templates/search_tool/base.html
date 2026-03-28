@@ -130,7 +130,10 @@
 
     function selectCurrentDir() {
       const path = document.getElementById('browser-path').dataset.path;
-      if (browseTarget) browseTarget.value = path;
+      if (browseTarget) {
+        browseTarget.value = path;
+        browseTarget.dispatchEvent(new Event('input'));
+      }
       closeBrowser();
     }
 
@@ -235,16 +238,31 @@
                 const badge = document.getElementById('index-badge');
                 if (!badge) return;
                 if (s.total === 0) { badge.textContent = ''; badge.className = 'index-badge'; badge.onclick = null; return; }
-                if (s.indexed === s.total) {
-                  badge.textContent = '✅ ' + s.total + ' indexés';
-                  badge.className = 'index-badge ok';
-                  badge.onclick = null;
-                  badge.title = '';
+                const failed = s.failed || 0;
+                const pending = s.total - s.indexed - failed;
+                const allDone = pending === 0;
+                const hint = document.getElementById('index-hint');
+                const hintText = document.getElementById('index-hint-text');
+                if (allDone) {
+                  let badgeText = s.total + ' fichiers • ' + s.indexed + ' indexés';
+                  if (failed > 0) badgeText += ' • ' + failed + ' non indexable(s)';
+                  badge.innerHTML = '<i class="fa-solid fa-check"></i> ' + badgeText;
+                  badge.className = 'index-badge ok' + (failed > 0 ? ' clickable' : '');
+                  badge.onclick = failed > 0 ? () => showUnindexed() : null;
+                  badge.title = failed > 0 ? 'Voir les fichiers non indexables' : '';
+                  if (hint) hint.style.display = 'none';
                 } else {
-                  badge.textContent = '⚠ ' + s.indexed + '/' + s.total + ' indexés';
+                  let badgeText = s.total + ' fichiers • ' + s.indexed + ' indexés';
+                  if (failed > 0) badgeText += ' • ' + failed + ' non indexable(s)';
+                  badgeText += ' • ' + pending + ' en attente';
+                  badge.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> ' + badgeText;
                   badge.className = 'index-badge warn clickable';
                   badge.onclick = () => showUnindexed();
                   badge.title = 'Voir les fichiers non indexés';
+                  if (hint && hintText) {
+                    hintText.textContent = pending + ' fichier(s) ne sont pas encore indexés. ';
+                    hint.style.display = '';
+                  }
                 }
               });
           }

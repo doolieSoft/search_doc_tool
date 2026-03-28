@@ -35,6 +35,11 @@ class IndexService:
         conn.commit()
         return conn
 
+    # indexed column values
+    STATUS_PENDING = 0
+    STATUS_OK = 1
+    STATUS_FAILED = -1
+
     def is_indexed(self, conn: sqlite3.Connection, path: str) -> bool:
         row = conn.execute(
             "SELECT mtime, indexed FROM files WHERE path=?", (path,)
@@ -42,24 +47,66 @@ class IndexService:
         if not row:
             return False
         mtime, indexed = row
-        if not indexed:
+        if indexed != self.STATUS_OK:
             return False
         try:
             return abs(mtime - os.path.getmtime(path)) < 1.0
         except OSError:
             return False
 
+    def count_statuses(self, conn: sqlite3.Connection, paths: list[str]) -> dict:
+        """Return {indexed, failed} counts for the given list of paths."""
+        indexed = 0
+        failed = 0
+        for path in paths:
+            row = conn.execute(
+                "SELECT mtime, indexed FROM files WHERE path=?", (path,)
+            ).fetchone()
+            if not row:
+                continue
+            mtime_db, status = row
+            if status == self.STATUS_OK:
+                try:
+                    if abs(mtime_db - os.path.getmtime(path)) < 1.0:
+                        indexed += 1
+                except OSError:
+                    pass
+            elif status == self.STATUS_FAILED:
+                failed += 1
+        return {"indexed": indexed, "failed": failed}
+
+    def _mark_failed(self, path: str) -> None:
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = 0.0
+        conn = self.get_db()
+        try:
+            conn.execute(
+                "INSERT INTO files(path, mtime, indexed) VALUES (?,?,?) "
+                "ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, indexed=excluded.indexed",
+                (path, mtime, self.STATUS_FAILED),
+            )
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
     def index_file(self, path: str, pdf_cache_dir: str) -> bool:
         """
         Index a file (PDF or DOCX→PDF).
         Returns True if text was extracted and indexed successfully.
+        Marks the file as STATUS_FAILED in the DB on permanent failure.
         """
         pdf_path = self._converter.get_pdf_path(path, pdf_cache_dir)
         if not pdf_path or not os.path.exists(pdf_path):
+            self._mark_failed(path)
             return False
 
         pages = self._extractor.extract_text_pdf(pdf_path)
         if not pages:
+            self._mark_failed(path)
             return False
 
         conn = self.get_db()
@@ -103,6 +150,39 @@ class IndexService:
                 "SELECT DISTINCT file FROM fts WHERE content MATCH ?", (query,)
             ).fetchall()
             return [{"file": row[0]} for row in rows if os.path.exists(row[0])]
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            conn.close()
+
+    def fts_search_with_content(self, terms: list[str], mode: str,
+                                case_sensitive: bool) -> list[dict]:
+        """
+        FTS5 search returning file, page AND content for each matching row.
+        Avoids re-reading PDFs for indexed files — content is already in the DB.
+        Content is remove_accents'd text (as stored at indexing time).
+        """
+        if not terms:
+            return []
+
+        def fts_term(t: str) -> str:
+            return f'"{remove_accents(t)}"' if " " in t else remove_accents(t)
+
+        if mode == "AND":
+            query = " AND ".join(fts_term(t) for t in terms)
+        else:
+            query = " OR ".join(fts_term(t) for t in terms)
+
+        conn = self.get_db()
+        try:
+            rows = conn.execute(
+                "SELECT file, page, content FROM fts WHERE content MATCH ?", (query,)
+            ).fetchall()
+            return [
+                {"file": row[0], "page": row[1], "content": row[2]}
+                for row in rows
+                if os.path.exists(row[0])
+            ]
         except sqlite3.OperationalError:
             return []
         finally:

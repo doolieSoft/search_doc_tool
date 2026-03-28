@@ -91,6 +91,21 @@ class SearchService:
     # ── Pattern building ──────────────────────────────────────────────────────
 
     @staticmethod
+    def _build_pattern_normalized(term: str, case_sensitive: bool, whole_word: bool):
+        """
+        Like build_pattern but always normalizes accents.
+        Used when searching FTS5 content (which is always remove_accents'd).
+        """
+        norm = remove_accents(term)
+        words = re.split(r"\s+", norm.strip())
+        escaped = [re.escape(w) for w in words]
+        pattern_str = r"[\s\W]*".join(escaped)
+        if whole_word:
+            pattern_str = r"\b" + pattern_str + r"\b"
+        flags = 0 if case_sensitive else re.IGNORECASE
+        return re.compile(pattern_str, flags)
+
+    @staticmethod
     def build_pattern(term: str, case_sensitive: bool, whole_word: bool):
         norm = remove_accents(term) if not case_sensitive else term
         words = re.split(r"\s+", norm.strip())
@@ -119,6 +134,65 @@ class SearchService:
                         and not f.startswith(("~$", "._", ".~"))):
                     files.append(os.path.join(folder, f))
         return files
+
+    # ── Search from DB content (no PDF I/O) ──────────────────────────────────
+
+    def search_from_db_content(self, path: str, pages: list[dict],
+                               terms: list[str], case_sensitive: bool,
+                               whole_word: bool, mode: str) -> list[dict]:
+        """
+        Search a file using text already loaded from FTS5 DB.
+        pages: list of {page: int, content: str} where content is remove_accents'd.
+        No PDF is opened — zero disk I/O for indexed files.
+        """
+        results = []
+
+        if mode == "AND":
+            for page_data in pages:
+                page_num = page_data["page"]
+                text = page_data["content"]
+                patterns = {}
+                for term in terms:
+                    try:
+                        patterns[term] = self._build_pattern_normalized(
+                            term, case_sensitive, whole_word)
+                    except re.error:
+                        return []
+                page_matches = {}
+                all_found = True
+                for term, pat in patterns.items():
+                    ms = list(pat.finditer(text))
+                    if not ms:
+                        all_found = False
+                        break
+                    page_matches[term] = ms
+                if all_found:
+                    best = [ms[0] for ms in page_matches.values()]
+                    results.append({
+                        "file": path,
+                        "term": " + ".join(terms),
+                        "context": self.get_combined_context(text, best),
+                        "page": page_num,
+                    })
+        else:
+            for page_data in pages:
+                page_num = page_data["page"]
+                text = page_data["content"]
+                for term in terms:
+                    try:
+                        pat = self._build_pattern_normalized(
+                            term, case_sensitive, whole_word)
+                    except re.error:
+                        continue
+                    for match in pat.finditer(text):
+                        results.append({
+                            "file": path,
+                            "term": term,
+                            "context": self.get_context(text, match),
+                            "page": page_num,
+                        })
+
+        return results
 
     # ── File search ───────────────────────────────────────────────────────────
 

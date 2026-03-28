@@ -4,6 +4,7 @@ It is placed in views/get/ because its purpose is to return a read-only search r
 The HTTP method is POST (due to HTMX form), but there is no side-effect beyond config persistence.
 """
 import os
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.conf import settings
@@ -64,14 +65,27 @@ class SearchView(LoginRequiredMixin, View):
         indexed_set = {f for f in files if index_svc.is_indexed(conn, f)}
         conn.close()
 
-        fts_results = index_svc.fts_search(terms, mode, case_sensitive)
-        fts_matched = {r["file"] for r in fts_results} & indexed_set
-        not_indexed = [f for f in files if f not in indexed_set]
-        to_search = [f for f in files if f in fts_matched] + not_indexed
+        # ── Fichiers indexés : lecture depuis FTS5 (zéro I/O disque) ─────────
+        fts_with_content = index_svc.fts_search_with_content(terms, mode, case_sensitive)
+        pages_by_file = defaultdict(list)
+        for row in fts_with_content:
+            if row["file"] in indexed_set:
+                pages_by_file[row["file"]].append(
+                    {"page": row["page"], "content": row["content"]}
+                )
 
         all_results = []
-        if to_search:
-            workers = min(8, os.cpu_count() or 4, max(1, len(to_search)))
+        for path, pages in pages_by_file.items():
+            all_results.extend(
+                search_svc.search_from_db_content(
+                    path, pages, terms, case_sensitive, whole_word, mode
+                )
+            )
+
+        # ── Fichiers non indexés : lecture PDF (comportement actuel) ─────────
+        not_indexed = [f for f in files if f not in indexed_set]
+        if not_indexed:
+            workers = min(8, os.cpu_count() or 4, max(1, len(not_indexed)))
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = {
                     executor.submit(
@@ -79,7 +93,7 @@ class SearchView(LoginRequiredMixin, View):
                         case_sensitive, whole_word, mode,
                         fpaths["pdf_cache"],
                     ): path
-                    for path in to_search
+                    for path in not_indexed
                 }
                 for future in as_completed(futures):
                     path = futures[future]

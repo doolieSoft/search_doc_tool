@@ -112,12 +112,12 @@ def get_index_summary(folder: str, recurse: bool, db_file: str,
         return cached[1]
     files = collect_files_fn(folder, recurse)
     if not files:
-        result = {"total": 0, "indexed": 0}
+        result = {"total": 0, "indexed": 0, "failed": 0}
     else:
         conn = index_service.get_db()
-        indexed = sum(1 for f in files if index_service.is_indexed(conn, f))
+        counts = index_service.count_statuses(conn, files)
         conn.close()
-        result = {"total": len(files), "indexed": indexed}
+        result = {"total": len(files), "indexed": counts["indexed"], "failed": counts["failed"]}
     _summary_cache[key] = (now, result)
     return result
 

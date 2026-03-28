@@ -12,7 +12,6 @@ class AddFavoriteView(LoginRequiredMixin, View):
         folder = request.POST.get("folder", "").strip()
         if not folder or not os.path.isdir(folder):
             return redirect("index")
-        name = os.path.basename(folder) or folder
         Favorite.objects.get_or_create(user=request.user, path=folder,
-                                       defaults={"name": name})
+                                       defaults={"name": folder})
         return redirect("index")
