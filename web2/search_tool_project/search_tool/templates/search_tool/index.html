@@ -120,8 +120,8 @@
                    autocomplete="off">
             <button type="button" class="btn-secondary"
                     onclick="openBrowser('id_folder')">Parcourir</button>
-            <button type="button" class="btn-fav" title="Ajouter aux favoris"
-                    onclick="addFavorite()"><i class="fa-solid fa-star"></i></button>
+            <button type="button" class="btn-fav" id="btn-fav"
+                    onclick="toggleFavorite()"><i class="fa-regular fa-star"></i></button>
           </div>
         </div>
 
@@ -323,10 +323,14 @@
     document.addEventListener('mouseup', onMouseUp);
   });
 
+  // Initialiser l'étoile au chargement
+  updateFavStar(document.getElementById('id_folder').value.trim());
+
   // Reset badge and fetch fresh summary when the folder changes
   let _folderDebounce = null;
   document.getElementById('id_folder').addEventListener('input', function() {
     const folder = this.value.trim();
+    updateFavStar(folder);
     const badge = document.getElementById('index-badge');
 
     // Effacer résultats, termes et badge
@@ -521,6 +525,23 @@
     const el = document.getElementById('id_folder');
     el.value = path;
     el.dispatchEvent(new Event('input'));
+  }
+
+  function _isFavorite(folder) {
+    return !!document.querySelector(`.sidebar-item[data-path="${CSS.escape(folder)}"]`);
+  }
+
+  function updateFavStar(folder) {
+    const btn = document.getElementById('btn-fav');
+    if (!btn) return;
+    const icon = btn.querySelector('i');
+    if (folder && _isFavorite(folder)) {
+      icon.className = 'fa-solid fa-star';
+      btn.title = 'Déjà dans les favoris';
+    } else {
+      icon.className = 'fa-regular fa-star';
+      btn.title = 'Ajouter aux favoris';
+    }
   }
 
   function addFavorite() {
